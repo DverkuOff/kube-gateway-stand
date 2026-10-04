@@ -1,16 +1,22 @@
 name: e2e
 
-# Full deployment on a clean GitHub-hosted Ubuntu 24.04 runner:
+# Full deployment on clean GitHub-hosted Ubuntu 24.04 runners (amd64 and arm64):
 #   deploy -> make check -> deploy again (must report changed=0) -> make check.
-# Manual for now (Actions -> e2e -> Run workflow).
+# Runs on every push to main that touches more than documentation, and manually
+# (Actions -> e2e -> Run workflow) for one architecture or both.
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
     inputs:
       arch:
         description: Runner architecture
         type: choice
-        options: [amd64, arm64, both]
-        default: amd64
+        options: [both, amd64, arm64]
+        default: both
 
 permissions:
   contents: read
@@ -29,7 +35,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ${{ fromJSON(inputs.arch == 'both' && '["ubuntu-24.04","ubuntu-24.04-arm"]' || inputs.arch == 'arm64' && '["ubuntu-24.04-arm"]' || '["ubuntu-24.04"]') }}
+        # push: both architectures; workflow_dispatch: the selected one(s).
+        runner: ${{ fromJSON(inputs.arch == 'amd64' && '["ubuntu-24.04"]' || inputs.arch == 'arm64' && '["ubuntu-24.04-arm"]' || '["ubuntu-24.04","ubuntu-24.04-arm"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
