@@ -147,9 +147,54 @@ kapply() {
   return 0
 }
 
+kgs_helm() { helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" "$@"; }
+
+# helm_objects_present NAME NAMESPACE — true when every object in the release manifest exists
+# (someone may have deleted a Deployment, a Service or an HTTPRoute by hand).
+helm_objects_present() {
+  local name=$1 ns=$2 tmp rc=0
+  tmp="$(mktemp -d)"
+  if ! kgs_helm get manifest "$name" -n "$ns" >"$tmp/manifest" 2>/dev/null; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  # kubectl -n would refuse objects that name another namespace (charts put some into kube-system),
+  # so the release namespace goes into the context of a temporary kubeconfig instead: objects without
+  # metadata.namespace are looked up there, the others in the namespace they name.
+  if grep -q '^kind:' "$tmp/manifest"; then
+    if kc config view --raw >"$tmp/kubeconfig" 2>/dev/null &&
+      kubectl --kubeconfig "$tmp/kubeconfig" config set-context --current --namespace="$ns" >/dev/null 2>&1; then
+      kubectl --kubeconfig "$tmp/kubeconfig" get -f "$tmp/manifest" -o name >/dev/null 2>&1 || rc=1
+    else
+      rc=1
+    fi
+  fi
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+# helm_unstick NAME NAMESPACE STATUS — a release left in pending-* by an interrupted helm (lost SSH
+# session, Ctrl-C, OOM) blocks every later upgrade with "another operation is in progress".
+# Roll it back to its last good revision, or uninstall it if it never had one.
+helm_unstick() {
+  local name=$1 ns=$2 status=$3 good
+  good="$(kgs_helm history "$name" -n "$ns" -o json 2>/dev/null |
+    jq -r '[.[] | select(.status == "deployed" or .status == "superseded")] | last | .revision // empty' || true)"
+  if [[ "$status" != pending-install && -n "$good" ]]; then
+    warn "helm release $ns/$name was left in '$status' by an interrupted run: rolling back to revision $good"
+    kgs_helm rollback "$name" "$good" -n "$ns" --wait --timeout "${HELM_TIMEOUT:-10m}" >/dev/null 2>&1 ||
+      die "cannot roll back the interrupted release $ns/$name (helm history $name -n $ns); fix it, then re-run ./deploy.sh"
+  else
+    warn "helm release $ns/$name was left in '$status' by an interrupted run: uninstalling it to install again"
+    kgs_helm uninstall "$name" -n "$ns" --wait --timeout "${HELM_TIMEOUT:-10m}" >/dev/null 2>&1 ||
+      die "cannot uninstall the interrupted release $ns/$name (helm history $name -n $ns); fix it, then re-run ./deploy.sh"
+  fi
+  changed "helm release $ns/$name: interrupted operation cleaned up"
+}
+
 # helm_release NAME NAMESPACE CHART VERSION [extra helm args...]
-# Skips the upgrade when chart, version, values files and --set arguments are unchanged and the
-# release is deployed, so a repeated run does not create new revisions.
+# Skips the upgrade when chart, version, values files and --set arguments are unchanged, the
+# release is deployed and all its objects exist, so a repeated run does not create new revisions.
 # KGS_HELM_FORCE=1 upgrades anyway (a stage detected drift of the live objects).
 helm_release() {
   local name=$1 ns=$2 chart=$3 version=$4
@@ -168,16 +213,22 @@ helm_release() {
       if [[ -d "$chart" ]]; then find -L "$chart" -type f -print0 | sort -z | xargs -0 cat; fi
     } | sha256sum | cut -d' ' -f1
   )"
-  status="$(helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" status "$name" -n "$ns" -o json 2>/dev/null | jq -r '.info.status // empty' || true)"
+  status="$(kgs_helm status "$name" -n "$ns" -o json 2>/dev/null | jq -r '.info.status // empty' || true)"
   if [[ "${KGS_HELM_FORCE:-}" != 1 && "$status" == "deployed" && -f "$stamp" && "$(cat "$stamp")" == "$fp" ]]; then
-    ok "helm release $ns/$name unchanged"
-    return 0
+    if helm_objects_present "$name" "$ns"; then
+      ok "helm release $ns/$name unchanged"
+      return 0
+    fi
+    info "helm release $ns/$name: some of its objects are missing in the cluster, upgrading to restore them"
   fi
+  case "$status" in
+    pending-*) helm_unstick "$name" "$ns" "$status" ;;
+  esac
   local vflag=() errlog
   [[ -n "$version" && ! -d "$chart" ]] && vflag=(--version "$version")
   errlog="$(mktemp)"
   # Explicit failure handling: callers may run this where `set -e` is suspended.
-  if ! helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" upgrade --install "$name" "$chart" \
+  if ! kgs_helm upgrade --install "$name" "$chart" \
     -n "$ns" --create-namespace "${vflag[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}" "${args[@]}" >/dev/null 2>"$errlog"; then
     cat "$errlog" >&2
     rm -f "$errlog" "$stamp"
