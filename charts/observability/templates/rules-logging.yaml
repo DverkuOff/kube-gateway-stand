@@ -1,5 +1,5 @@
 {{- /*
-Alerts of the log pipeline (Fluentd -> Loki). Owner: logging.
+Alerts of the log pipeline (Fluentd -> Loki).
 Fluentd's write_count is not used: it grows on failed flushes too. Delivery is judged by output
 errors on the Fluentd side and by lines received / discarded on the Loki side.
 fluentd_output_status_* are gauges (fluent-plugin-prometheus, gauge_all) that only grow until a
