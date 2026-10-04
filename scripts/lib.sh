@@ -79,6 +79,8 @@ invoking_user() {
 
 # write_file DEST MODE  < content
 # Replaces DEST only when the content differs. Sets WRITE_CHANGED=1 if it wrote the file.
+# Feed it with a heredoc or `< <(cmd)`, not `cmd | write_file`: a pipeline runs it in a subshell
+# and the counters and WRITE_CHANGED are lost.
 write_file() {
   local dest=$1 mode=${2:-0644} tmp
   tmp="$(mktemp)"
@@ -108,7 +110,7 @@ render_template() {
 apt_install() {
   local missing=() p
   for p in "$@"; do
-    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || missing+=("$p")
+    dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -Eq '^(install|hold) ok installed$' || missing+=("$p")
   done
   if ((${#missing[@]} == 0)); then
     ok "packages present: $*"
@@ -160,7 +162,7 @@ helm_release() {
         if [[ "$a" == "-f" || "$a" == "--values" ]]; then cat "${args[$((i + 1))]}"; fi
       done
       # local charts: hash their sources too
-      if [[ -d "$chart" ]]; then find "$chart" -type f -print0 | sort -z | xargs -0 cat; fi
+      if [[ -d "$chart" ]]; then find -L "$chart" -type f -print0 | sort -z | xargs -0 cat; fi
     } | sha256sum | cut -d' ' -f1
   )"
   status="$(helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" status "$name" -n "$ns" -o json 2>/dev/null | jq -r '.info.status // empty' || true)"
@@ -170,8 +172,12 @@ helm_release() {
   fi
   local vflag=()
   [[ -n "$version" && ! -d "$chart" ]] && vflag=(--version "$version")
-  helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" upgrade --install "$name" "$chart" \
-    -n "$ns" --create-namespace "${vflag[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}" "${args[@]}" >/dev/null
+  # Explicit failure handling: callers may run this where `set -e` is suspended.
+  if ! helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" upgrade --install "$name" "$chart" \
+    -n "$ns" --create-namespace "${vflag[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}" "${args[@]}" >/dev/null; then
+    rm -f "$stamp"
+    die "helm release $ns/$name failed; inspect: kubectl -n $ns get pods,events; then re-run ./deploy.sh"
+  fi
   printf '%s' "$fp" >"$stamp"
   changed "helm release $ns/$name (${version:-local})"
 }

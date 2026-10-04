@@ -1,0 +1,278 @@
+# Fluentd — log collector (chart fluent/fluentd, release "fluentd", namespace "logging").
+# DaemonSet: tails container logs on every node, enriches them with Kubernetes metadata,
+# parses the access/error logs of the web app and the gateway and pushes them to Loki.
+# image.repository / image.tag are passed by scripts/60-logging.sh from versions.env.
+kind: DaemonSet
+
+image:
+  pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true
+rbac:
+  create: true                   # get/list/watch pods and namespaces for kubernetes_metadata
+podSecurityPolicy:
+  enabled: false
+
+# Root is needed to read the kubelet-owned files in /var/log/pods (0640 root); no capabilities.
+podSecurityContext:
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  runAsUser: 0
+  runAsGroup: 0
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+env:
+  - name: K8S_NODE_NAME          # kubernetes_metadata watches only the pods of its own node
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 160Mi
+  limits:
+    memory: 384Mi
+
+tolerations:
+  - operator: Exists
+    effect: NoSchedule
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+
+# The chart defaults mount the whole /var/log read-write and /var/lib/docker/containers.
+# Only the container log directories are mounted, read-only; positions and buffers live in
+# /var/lib/fluentd on the host so they survive pod restarts.
+mountVarLogDirectory: false
+mountDockerContainersDirectory: false
+volumes:
+  - name: varlogcontainers
+    hostPath:
+      path: /var/log/containers
+      type: DirectoryOrCreate
+  - name: varlogpods
+    hostPath:
+      path: /var/log/pods
+      type: DirectoryOrCreate
+  - name: state
+    hostPath:
+      path: /var/lib/fluentd
+      type: DirectoryOrCreate
+  - name: tmp
+    emptyDir:
+      sizeLimit: 64Mi
+volumeMounts:
+  - name: varlogcontainers
+    mountPath: /var/log/containers
+    readOnly: true
+  - name: varlogpods
+    mountPath: /var/log/pods
+    readOnly: true
+  - name: state
+    mountPath: /var/lib/fluentd
+  - name: tmp
+    mountPath: /tmp
+
+service:
+  enabled: true
+  type: ClusterIP
+  ports: []
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    additionalLabels: {}
+    interval: 30s
+  prometheusRule:
+    enabled: false               # alerts live in charts/observability (rules-logging.yaml)
+
+dashboards:
+  enabled: false                 # boolean: the chart tests truthiness, so the string "false" would enable it
+
+plugins: []
+
+# The chart's main fluent.conf routes Fluentd's own events to @FLUENT_LOG (discarded) and
+# includes config.d/*.conf. Helm merges this map with the chart defaults, so every default
+# file is either overridden here or removed with null.
+fileConfigs:
+  03_dispatch.conf: null
+  01_sources.conf: |-
+    # Container logs written by the kubelet in CRI format:
+    #   <time> <stdout|stderr> <F|P> <message>
+    # Fluentd's own logs are excluded so that its warnings never loop back into the pipeline.
+    <source>
+      @type tail
+      @id in_tail_containers
+      @label @KUBE
+      path /var/log/containers/*.log
+      exclude_path ["/var/log/containers/fluentd-*_logging_*.log"]
+      pos_file /var/lib/fluentd/containers.log.pos
+      pos_file_compaction_interval 1h
+      tag kube.*
+      read_from_head true
+      follow_inodes true
+      refresh_interval 5
+      rotate_wait 5
+      <parse>
+        @type cri
+        time_format %Y-%m-%dT%H:%M:%S.%N%:z
+        keep_time_key false
+      </parse>
+    </source>
+
+    # Prometheus metrics on :24231/metrics (the plugin's own default bind is not relied upon).
+    <source>
+      @type prometheus
+      @id in_prometheus
+      bind 0.0.0.0
+      port 24231
+      metrics_path /metrics
+    </source>
+    <source>
+      @type prometheus_monitor
+      @id in_prometheus_monitor
+    </source>
+    <source>
+      @type prometheus_output_monitor
+      @id in_prometheus_output_monitor
+    </source>
+
+  02_filters.conf: |-
+    <label @KUBE>
+      # namespace, pod, container, node and pod labels (cached, watched via the API server)
+      <filter kube.**>
+        @type kubernetes_metadata
+        @id filter_kube_metadata
+        skip_labels false
+        skip_container_metadata true
+        skip_namespace_metadata true
+        skip_master_url true
+      </filter>
+
+      # Structured logs of the web app (namespace web) and the gateway (namespace gateway):
+      #   * JSON lines (nginx access log, Traefik access and service logs): the event time is
+      #     taken from the JSON "time" field, not from the CRI record;
+      #   * nginx error log lines: "2026/10/04 12:00:00 [error] 1#1: *2 open() ... failed ...".
+      # Lines that match neither pattern pass through unchanged (field "message").
+      <filter kube.var.log.containers.*_web_*.log kube.var.log.containers.*_gateway_*.log>
+        @type parser
+        @id filter_parse_http
+        key_name message
+        reserve_data true
+        remove_key_name_field true
+        emit_invalid_record_to_error false
+        <parse>
+          @type multi_format
+          <pattern>
+            format json
+            time_key time
+            time_type mixed
+            time_format %iso8601
+            time_format_fallbacks %Y-%m-%dT%H:%M:%S%z, float
+            keep_time_key true
+          </pattern>
+          <pattern>
+            format regexp
+            expression /^(?<time>\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2}) \[(?<level>[a-z]+)\] (?<pid>\d+)#(?<tid>\d+): (?<msg>.*)$/
+            time_format %Y/%m/%d %H:%M:%S
+            utc true
+            keep_time_key true
+          </pattern>
+        </parse>
+      </filter>
+
+      # The gateway logs the incoming X-Request-ID as "request_X-Request-Id"; expose it under
+      # the same name as the app does, so one LogQL filter finds both lines.
+      <filter kube.var.log.containers.*_gateway_*.log>
+        @type record_transformer
+        @id filter_gateway_request_id
+        enable_ruby true
+        <record>
+          request_id ${record["request_X-Request-Id"] || record["request_id"]}
+        </record>
+      </filter>
+
+      # Flat, low-cardinality fields for Loki labels and a log_type classification:
+      #   access — HTTP access log (nginx "status", Traefik "DownstreamStatus");
+      #   error  — nginx error log, or a JSON line with level error/fatal/panic;
+      #   other  — everything else.
+      <filter kube.**>
+        @type record_transformer
+        @id filter_flatten
+        enable_ruby true
+        <record>
+          namespace ${record.dig("kubernetes", "namespace_name") || "unknown"}
+          pod ${record.dig("kubernetes", "pod_name")}
+          container ${record.dig("kubernetes", "container_name") || "unknown"}
+          node ${record.dig("kubernetes", "host")}
+          app ${record.dig("kubernetes", "labels", "app.kubernetes.io/name")}
+          log_type ${if record.key?("status") || record.key?("DownstreamStatus") then "access" elsif record.key?("tid") || %w[error fatal panic].include?(record["level"].to_s.downcase) then "error" else "other" end}
+        </record>
+        remove_keys kubernetes,docker,logtag
+      </filter>
+
+      <filter kube.**>
+        @type prometheus
+        @id filter_prometheus_records
+        <metric>
+          name fluentd_input_status_num_records_total
+          type counter
+          desc Records read from container logs
+          <labels>
+            source_namespace $.namespace
+            log_type $.log_type
+          </labels>
+        </metric>
+      </filter>
+
+      <match kube.**>
+        @type relabel
+        @id relabel_output
+        @label @OUTPUT
+      </match>
+    </label>
+
+  04_outputs.conf: |-
+    <label @OUTPUT>
+      # Labels: namespace, container, stream, log_type (bounded sets). pod, node, request_id and
+      # the parsed fields stay in the JSON line: query them with `| json`.
+      <match **>
+        @type loki
+        @id out_loki
+        url "#{ENV['LOKI_URL'] || 'http://loki.logging.svc.cluster.local:3100'}"
+        line_format json
+        include_thread_label false
+        <label>
+          namespace
+          container
+          stream
+          log_type
+        </label>
+        <buffer>
+          @type file
+          path /var/lib/fluentd/buffer/loki
+          total_limit_size 256m
+          chunk_limit_size 1m
+          flush_mode interval
+          flush_interval 2s
+          flush_thread_count 1
+          flush_at_shutdown true
+          overflow_action drop_oldest_chunk
+          retry_type exponential_backoff
+          retry_wait 1s
+          retry_max_interval 30s
+          retry_timeout 1h
+          disable_chunk_backup true
+        </buffer>
+      </match>
+    </label>

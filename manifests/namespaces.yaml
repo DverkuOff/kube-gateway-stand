@@ -1,0 +1,52 @@
+# Namespaces of the platform with Pod Security Admission levels.
+# Privileged namespaces keep warn/audit at "restricted" so every relaxation is visible.
+# Label gateway-access=true allows HTTPRoutes of the namespace to attach to the https listener.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway
+  labels:
+    # Traefik binds hostPort 80/443, which the baseline/restricted profiles forbid.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: web
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    gateway-access: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    # node-exporter needs hostNetwork/hostPID/hostPath.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    gateway-access: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    # Fluentd reads container logs through hostPath.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

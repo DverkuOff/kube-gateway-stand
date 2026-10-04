@@ -1,0 +1,6 @@
+apiVersion: v2
+name: platform
+description: Gateway API entry point (GatewayClass, Gateway, HTTP to HTTPS redirect) and the TLS chain issued by cert-manager.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

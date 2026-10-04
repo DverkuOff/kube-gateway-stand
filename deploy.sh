@@ -8,6 +8,7 @@
 #   PROFILE            default | small  (small: lower requests/retention for 2 vCPU / 4 GB)
 #   DOCKERHUB_MIRROR   registry mirror for docker.io (default https://mirror.gcr.io, "" = none)
 #   CONTAINERD_SOURCE  ubuntu | docker (use docker where Docker's containerd.io is already installed)
+#   CANARY_WEIGHT      share of traffic for v2 in percent (default 20)
 #   ONLY_STAGES        space-separated subset of stages to run, e.g. "30-platform 40-app"
 set -Eeuo pipefail
 
@@ -15,7 +16,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export REPO_ROOT
 
 if [[ $EUID -ne 0 ]]; then
-  exec sudo --preserve-env=NODE_IP,POD_CIDR,SVC_CIDR,PROFILE,DOCKERHUB_MIRROR,CONTAINERD_SOURCE,ONLY_STAGES,HOST_SUFFIX "$0" "$@"
+  exec sudo --preserve-env=NODE_IP,POD_CIDR,SVC_CIDR,PROFILE,DOCKERHUB_MIRROR,CONTAINERD_SOURCE,ONLY_STAGES,HOST_SUFFIX,CANARY_WEIGHT,GATEWAY_TIMEOUT "$0" "$@"
 fi
 
 # shellcheck source=scripts/lib.sh
@@ -40,8 +41,10 @@ for stage in "${STAGES[@]}"; do
     continue
   fi
   step "stage $stage"
+  stage_started=$SECONDS
   # shellcheck source=/dev/null
   source "$REPO_ROOT/scripts/$stage.sh"
+  info "stage $stage took $((SECONDS - stage_started))s"
 done
 
 summary

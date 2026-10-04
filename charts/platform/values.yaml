@@ -1,0 +1,33 @@
+# Node address. Used as an extra IP SAN of the gateway certificate when set.
+nodeIP: ""
+# DNS suffix of all published hosts, e.g. 192.0.2.10.sslip.io (required).
+# The gateway certificate covers "*.<hostSuffix>" and "<hostSuffix>".
+hostSuffix: ""
+
+gatewayClass:
+  name: traefik
+  controllerName: traefik.io/gateway-controller
+
+gateway:
+  name: web
+  # Namespaces with this label may attach HTTPRoutes to the https listener.
+  routeNamespaceLabel:
+    key: gateway-access
+    value: "true"
+
+# HTTP -> HTTPS redirect on the plain listener.
+redirect:
+  statusCode: 301
+
+tls:
+  # Self-signed root -> CA certificate -> CA ClusterIssuer -> gateway certificate.
+  selfSignedIssuer: selfsigned
+  ca:
+    name: platform-ca
+    namespace: cert-manager       # cluster resource namespace of cert-manager
+    commonName: kube-gateway-stand CA
+    duration: 87600h              # 10 years
+  certificate:
+    secretName: web-tls
+    duration: 2160h               # 90 days
+    renewBefore: 720h             # 30 days

@@ -1,0 +1,13 @@
+# PROFILE=small (2 vCPU / 4 GB): lower requests/limits and a shorter retention.
+# The PVC size is kept: volumeClaimTemplates of an existing StatefulSet cannot change.
+loki:
+  limits_config:
+    retention_period: 48h
+    max_query_lookback: 48h
+singleBinary:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi

@@ -1,4 +1,120 @@
 #!/usr/bin/env bash
-# demo-metrics — owner: track C (not implemented yet)
+# Sends demo traffic through the Gateway and shows what Prometheus collected, with the PromQL used.
+# Runs as a regular user (no sudo) with ~/.kube/config written by the deployment.
+#
+#   ./scripts/demo-metrics.sh            # ~200 requests, then queries
+#   REQUESTS=400 ./scripts/demo-metrics.sh
+#   SKIP_TRAFFIC=1 ./scripts/demo-metrics.sh   # queries only
 set -Eeuo pipefail
-echo "scripts/demo-metrics.sh: not implemented yet" >&2
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CA="$REPO_ROOT/out/ca.crt"
+REQUESTS="${REQUESTS:-200}"
+PROM_PROXY="/api/v1/namespaces/monitoring/services/kps-prometheus:http-web/proxy"
+SVC='.*-svc-web-web-v[12]-[0-9]+@kubernetesgateway'
+SVC_V2='.*-svc-web-web-v2-[0-9]+@kubernetesgateway'
+
+b=''; c=''; n=''
+if [[ -t 1 ]]; then b=$'\e[1m'; c=$'\e[36m'; n=$'\e[0m'; fi
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+title() { printf '\n%s==> %s%s\n' "$b" "$*" "$n"; }
+
+for tool in kubectl curl jq; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool not found"
+done
+kubectl get --raw /readyz --request-timeout=5s >/dev/null 2>&1 \
+  || die "cannot reach the cluster with ${KUBECONFIG:-$HOME/.kube/config}; run sudo ./deploy.sh (it writes the kubeconfig for your user)"
+kubectl -n monitoring get service kps-prometheus >/dev/null 2>&1 \
+  || die "Prometheus (monitoring/kps-prometheus) not found; run stage 50-monitoring"
+
+# promql QUERY -> raw JSON result vector, queried through the API server service proxy
+promql() {
+  local q enc
+  q=$1
+  enc="$(jq -rn --arg q "$q" '$q | @uri')"
+  kubectl get --raw "${PROM_PROXY}/api/v1/query?query=${enc}" | jq -c '.data.result'
+}
+show() {  # show QUERY JQ_FORMAT
+  printf '  %sPromQL:%s %s\n' "$c" "$n" "$1"
+  local out
+  out="$(promql "$1" | jq -r "if length == 0 then \"  (no data yet)\" else .[] | $2 end")"
+  printf '%s\n' "$out"
+}
+
+# ---------- traffic ----------
+if [[ -z "${SKIP_TRAFFIC:-}" ]]; then
+  [[ -f "$CA" ]] || die "$CA not found (stage 30-platform exports the cluster CA there)"
+  node_ip="$(kubectl -n gateway get gateway web -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)"
+  [[ -n "$node_ip" ]] || die "Gateway gateway/web has no address in its status; check: kubectl -n gateway describe gateway web"
+  app_host="${APP_HOST:-$(kubectl -n web get httproute -o jsonpath='{.items[0].spec.hostnames[0]}' 2>/dev/null || true)}"
+  app_host="${app_host:-app.${node_ip}.sslip.io}"
+
+  req() {  # req PATH [curl args...] -> prints the status code
+    local path=$1
+    shift
+    curl -s -o /dev/null -w '%{http_code}\n' --max-time 5 --cacert "$CA" \
+      --resolve "${app_host}:443:${node_ip}" "$@" "https://${app_host}${path}" || echo 000
+  }
+
+  paced=$((REQUESTS * 3 / 5))
+  burst=$((REQUESTS - paced))
+  title "Sending ${paced} paced requests to https://${app_host} (via ${node_ip}): /, X-Version: v2, ?version=v2, /preview, a missing page"
+  codes="$(
+    for ((i = 1; i <= paced; i++)); do
+      case $((i % 10)) in
+        1) req / -H 'X-Version: v2' ;;
+        2) req '/?version=v2' ;;
+        3) req /preview ;;
+        4) req /no-such-page ;;
+        *) req / ;;
+      esac
+      sleep 0.06   # stay under the rate limit (20 rps)
+    done
+  )"
+  printf '%s\n' "$codes" | sort | uniq -c | awk '{printf "    HTTP %s: %s\n", $2, $1}'
+
+  title "Sending a burst of ${burst} parallel requests to trigger the rate limit (429)"
+  export -f req
+  export CA app_host node_ip
+  codes="$(seq "$burst" | xargs -P 20 -I{} bash -c 'req /')"
+  printf '%s\n' "$codes" | sort | uniq -c | awk '{printf "    HTTP %s: %s\n", $2, $1}'
+
+  title "Waiting for Prometheus to scrape the new samples"
+  deadline=$((SECONDS + ${SCRAPE_WAIT:-150}))
+  until [[ "$(promql "sum(increase(traefik_service_requests_total{service=~\"${SVC}\"}[2m])) > 0" | jq 'length')" -gt 0 ]]; do
+    if ((SECONDS >= deadline)); then
+      printf '  no samples yet; Prometheus scrapes every 30-60 s, re-run with SKIP_TRAFFIC=1 in a minute\n'
+      break
+    fi
+    sleep 10
+  done
+  sleep 5
+fi
+
+# ---------- queries ----------
+title "Healthy scrape targets by job"
+show 'count by (job) (up == 1)' '"    \(.metric.job // "-"): \(.value[1])"'
+down="$(promql 'up == 0' | jq -r '.[] | "    DOWN \(.metric.job) \(.metric.instance)"')"
+[[ -z "$down" ]] || printf '%s\n' "$down"
+
+title "Requests through the gateway by status code (last 5 min)"
+show "sum by (code) (round(increase(traefik_service_requests_total{service=~\"${SVC}\"}[5m])))" \
+  '"    HTTP \(.metric.code): \(.value[1])"'
+
+title "Requests by version (last 5 min)"
+show "sum by (version) (label_replace(round(increase(traefik_service_requests_total{service=~\"${SVC}\"}[5m])), \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\"))" \
+  '"    \(.metric.version): \(.value[1])"'
+
+title "Canary share: v2 / all (last 5 min)"
+show "sum(rate(traefik_service_requests_total{service=~\"${SVC_V2}\"}[5m])) / sum(rate(traefik_service_requests_total{service=~\"${SVC}\"}[5m]))" \
+  '"    \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 100 | floor)%" end) of requests went to v2"'
+
+title "p95 latency by version (last 5 min)"
+show "histogram_quantile(0.95, sum by (le, version) (label_replace(rate(traefik_service_request_duration_seconds_bucket{service=~\"${SVC}\"}[5m]), \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\")))" \
+  '"    \(.metric.version): \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 1000 | floor) ms" end)"'
+
+title "Rejected by the rate limit, HTTP 429 (last 5 min)"
+show 'sum(round(increase(traefik_entrypoint_requests_total{entrypoint="websecure",code="429"}[5m])))' \
+  '"    429 responses: \(.value[1])"'
+
+printf '\nThe same queries are on the Grafana dashboard "Web: golden signals" (./scripts/creds.sh shows the URL and login).\n'

@@ -1,0 +1,99 @@
+# Loki — log storage (chart grafana-community/loki, release "loki", namespace "logging").
+# Monolithic mode: one replica, filesystem storage on a PVC, no caches, no gateway.
+# Clients use Service "loki" port 3100 (Fluentd pushes there, Grafana reads from there).
+deploymentMode: Monolithic
+
+loki:
+  auth_enabled: false            # single tenant ("fake"); the chart default is true
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: filesystem
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    retention_period: 72h
+    reject_old_samples: true
+    reject_old_samples_max_age: 72h
+    max_query_lookback: 72h
+    ingestion_rate_mb: 8
+    ingestion_burst_size_mb: 16
+    max_cache_freshness_per_query: 10m
+    split_queries_by_interval: 15m
+    query_timeout: 300s
+    volume_enabled: true
+  compactor:
+    working_directory: /var/loki/compactor
+    retention_enabled: true
+    retention_delete_delay: 1h
+    compaction_interval: 10m
+    delete_request_store: filesystem
+  ingester:
+    chunk_idle_period: 30m
+    chunk_target_size: 1572864
+    wal:
+      flush_on_shutdown: true
+  pattern_ingester:
+    enabled: false
+  analytics:
+    reporting_enabled: false
+  ui:
+    enabled: false
+
+singleBinary:
+  replicas: 1
+  sidecar: false                 # no rules sidecar (it would need to watch ConfigMaps and Secrets)
+  persistence:
+    enabled: true
+    size: 5Gi
+  podDisruptionBudget:
+    enabled: false               # one replica: a PDB would only block node drains
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 768Mi              # GOMEMLIMIT is derived from this limit (defaults.goSettings.goMemLimitFactor)
+
+# Everything a single small node does not need.
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false                 # default would request ~9.8Gi (allocatedMemory 8192)
+resultsCache:
+  enabled: false
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+minio:
+  enabled: false
+sidecar:
+  rules:
+    enabled: false
+
+# Simple Scalable / Distributed targets are off in Monolithic mode.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+  dashboards:
+    enabled: false
+  rules:
+    enabled: false
+  alerts:
+    enabled: false

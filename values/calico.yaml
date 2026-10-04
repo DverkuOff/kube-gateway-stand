@@ -1,0 +1,32 @@
+# Calico via tigera-operator (chart projectcalico/tigera-operator, version CALICO_VERSION).
+# Installation spec reference: https://docs.tigera.io/calico/latest/reference/installation/api#installationspec
+# The IP pool CIDR is passed by scripts/20-cluster.sh:
+#   --set installation.calicoNetwork.ipPools[0].cidr=$POD_CIDR   (must equal kubeadm podSubnet)
+installation:
+  enabled: true
+  # Single-node cluster: one replica of calico-kube-controllers/typha is enough.
+  controlPlaneReplicas: 1
+  calicoNetwork:
+    bgp: Disabled
+    linuxDataplane: Iptables
+    # portmap CNI plugin: the gateway pods publish ports 80/443 through hostPort.
+    hostPorts: Enabled
+    nodeAddressAutodetectionV4:
+      kubernetes: NodeInternalIP
+    ipPools:
+      - name: default-ipv4-ippool
+        cidr: 10.244.0.0/16
+        encapsulation: VXLAN
+        natOutgoing: Enabled
+        nodeSelector: all()
+        blockSize: 26
+
+# Calico API server (projectcalico.org/v3 API). Kept on: without it the operator reports
+# tigerastatus "tiers" as Degraded ("Waiting for Tigera API server to be ready").
+apiServer:
+  enabled: true
+# Flow aggregator and UI: enabled by default in the chart, not used here.
+goldmane:
+  enabled: false
+whisker:
+  enabled: false

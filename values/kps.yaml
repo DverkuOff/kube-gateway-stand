@@ -1,0 +1,201 @@
+# kube-prometheus-stack values (release "kps", namespace "monitoring").
+# Installed by scripts/50-monitoring.sh. Grafana host is passed with --set grafana.grafana\.ini.server.root_url.
+# CRDs are applied separately (stage 30, server-side apply), so the chart does not manage them.
+
+fullnameOverride: kps
+
+crds:
+  enabled: false
+
+# Single-node demo: alerts are evaluated by Prometheus and visible in Prometheus/Grafana,
+# no Alertmanager to save memory.
+alertmanager:
+  enabled: false
+
+defaultRules:
+  create: true
+  rules:
+    alertmanager: false
+
+# --- control plane targets -------------------------------------------------------------
+# etcd and kube-proxy expose metrics on 127.0.0.1 only (deliberately, no plain-HTTP metrics on
+# the node address), so they are not scraped. etcd latency is still visible through the
+# apiserver metrics (etcd_request_duration_seconds, apiserver_storage_*).
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+# kube-scheduler and kube-controller-manager listen on the node address over HTTPS with
+# authentication/authorization (kubeadm config). Serving certificates are self-signed, hence
+# insecureSkipVerify (chart default tlsConfig); the bearer token comes from the chart-managed
+# Prometheus ServiceAccount token Secret (chart default authorization).
+kubeScheduler:
+  enabled: true
+  service:
+    port: 10259
+    targetPort: 10259
+  serviceMonitor:
+    https: true
+
+kubeControllerManager:
+  enabled: true
+  service:
+    port: 10257
+    targetPort: 10257
+  serviceMonitor:
+    https: true
+
+# --- Prometheus --------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    retention: 2d
+    retentionSize: 2GB
+    # Pick up ServiceMonitor/PodMonitor/PrometheusRule/Probe/ScrapeConfig from every namespace,
+    # not only those labelled release=kps.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    scrapeConfigSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 1Gi
+      limits:
+        memory: 2Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          # default StorageClass (local-path)
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  prometheusConfigReloader:
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        memory: 64Mi
+
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# --- node-exporter -----------------------------------------------------------------------
+# node-exporter itself listens on 127.0.0.1:8100 only; kube-rbac-proxy publishes it on :9100
+# over HTTPS and checks every request with TokenReview + SubjectAccessReview
+# (the chart grants Prometheus "get services/kps-prometheus-node-exporter").
+prometheus-node-exporter:
+  kubeRBACProxy:
+    enabled: true
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      requests:
+        cpu: 10m
+        memory: 20Mi
+      limits:
+        memory: 64Mi
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: ["ALL"]
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+  prometheus:
+    monitor:
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # kube-rbac-proxy generates a self-signed serving certificate
+        insecureSkipVerify: true
+
+# --- Grafana -----------------------------------------------------------------------------
+grafana:
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+
+  # Namespaced RBAC bound to the pre-created Role "grafana-sidecar" (configmaps only, see
+  # scripts/50-monitoring.sh): the sidecars never get access to Secrets.
+  rbac:
+    namespaced: true
+    useExistingRole: grafana-sidecar
+
+  persistence:
+    enabled: false
+
+  testFramework:
+    enabled: false
+
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: [monitoring]
+      resource: configmap
+    datasources:
+      resource: configmap
+      alertmanager:
+        enabled: false
+
+  grafana.ini:
+    server:
+      # root_url is set at deploy time: --set grafana.grafana\.ini.server.root_url=https://<GRAFANA_HOST>
+      enforce_domain: false
+    security:
+      cookie_secure: true
+      disable_gravatar: true
+    auth.anonymous:
+      enabled: false
+    users:
+      allow_sign_up: false
+      allow_org_create: false
+    analytics:
+      check_for_updates: false
+      check_for_plugin_updates: false
+      reporting_enabled: false
+
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      access: proxy
+      url: http://loki.logging.svc.cluster.local:3100
+      editable: false
+      jsonData:
+        maxLines: 1000
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi

@@ -1,0 +1,136 @@
+name: e2e
+
+# Full deployment on a clean GitHub-hosted Ubuntu 24.04 runner:
+#   deploy -> make check -> deploy again (must report changed=0) -> make check.
+# Manual for now (Actions -> e2e -> Run workflow).
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Runner architecture
+        type: choice
+        options: [amd64, arm64, both]
+        default: amd64
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash  # explicit: adds -o pipefail, so `deploy.sh | tee` fails when deploy.sh fails
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: deploy (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ${{ fromJSON(inputs.arch == 'both' && '["ubuntu-24.04","ubuntu-24.04-arm"]' || inputs.arch == 'arm64' && '["ubuntu-24.04-arm"]' || '["ubuntu-24.04"]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      # The runner image already has Docker's containerd.io; use it instead of the Ubuntu package.
+      CONTAINERD_SOURCE: docker
+      LOG_DIR: ${{ github.workspace }}/e2e-logs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Runner facts
+        run: |
+          mkdir -p "$LOG_DIR"
+          {
+            echo "## Runner"; uname -a; . /etc/os-release; echo "$PRETTY_NAME"
+            echo "CPU: $(nproc)"; free -h; df -h /; swapon --show || true
+            echo "## Preinstalled tools that may shadow the ones deploy.sh installs"
+            for t in containerd runc kubectl kubeadm kubelet helm crictl; do
+              printf '%-10s %s\n' "$t" "$(command -v "$t" || echo -)"
+            done
+            containerd --version || true
+          } 2>&1 | tee "$LOG_DIR/runner.txt"
+
+      - name: Free disk space
+        run: |
+          # Large toolchains the deployment does not need (~20 GB); images and PVCs need the space.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift || true
+          df -h /
+
+      - name: Deploy (first run)
+        timeout-minutes: 40
+        run: sudo CONTAINERD_SOURCE="$CONTAINERD_SOURCE" ./deploy.sh 2>&1 | tee "$LOG_DIR/deploy-1.log"
+
+      - name: make check (after first run)
+        timeout-minutes: 10
+        run: make check 2>&1 | tee "$LOG_DIR/check-1.log"
+
+      - name: Deploy (second run, must change nothing)
+        timeout-minutes: 20
+        run: |
+          sudo CONTAINERD_SOURCE="$CONTAINERD_SOURCE" ./deploy.sh 2>&1 | tee "$LOG_DIR/deploy-2.log"
+          if ! grep -Eq '^Done: ok=[0-9]+ changed=0$' "$LOG_DIR/deploy-2.log"; then
+            echo "::error title=Not idempotent::the second deploy reported changes"
+            grep -E '^[[:space:]]+changed[[:space:]]' "$LOG_DIR/deploy-2.log" || true
+            exit 1
+          fi
+
+      - name: make check (after second run)
+        timeout-minutes: 10
+        run: make check 2>&1 | tee "$LOG_DIR/check-2.log"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          RUNNER_LABEL: ${{ matrix.runner }}
+        run: |
+          {
+            echo "### e2e on $RUNNER_LABEL"
+            for f in deploy-1 deploy-2; do
+              [[ -f "$LOG_DIR/$f.log" ]] || continue
+              echo "- $f: $(grep -E '^(Done:|Elapsed:)' "$LOG_DIR/$f.log" | tr '\n' ' ')"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect diagnostics
+        if: ${{ failure() }}
+        run: |
+          d="$LOG_DIR/diag"
+          mkdir -p "$d"
+          k() { sudo kubectl --kubeconfig /etc/kubernetes/admin.conf "$@"; }
+          run() {  # run FILE CMD... — never fails, so every item is collected
+            local f=$1; shift
+            { echo "\$ $*"; "$@"; } >"$d/$f" 2>&1 || true
+          }
+          run nodes.txt          k get nodes -o wide
+          run pods.txt           k get pods -A -o wide
+          run events.txt         k get events -A --sort-by=.lastTimestamp
+          run describe-pods.txt  k describe pods -A
+          run helm.txt           sudo helm --kubeconfig /etc/kubernetes/admin.conf list -A
+          run gateway-api.txt    k get gatewayclasses,gateways,httproutes -A -o yaml
+          run certificates.txt   k get certificates,certificaterequests,issuers,clusterissuers -A
+          run services.txt       k get svc,endpointslices -A -o wide
+          run tigerastatus.txt   k get tigerastatus
+          run crictl.txt         sudo crictl ps -a
+          run kubelet.log        sudo journalctl -u kubelet --no-pager -n 500
+          run containerd.log     sudo journalctl -u containerd --no-pager -n 300
+          run host.txt           bash -c 'free -h; df -h; ss -ltnp'
+          # logs of pods that are not Completed and not fully ready
+          k get pods -A --no-headers 2>/dev/null |
+            awk '$4 != "Completed" { split($3, r, "/"); if ($4 != "Running" || r[1] != r[2]) print $1, $2 }' |
+            while read -r ns pod; do
+              run "logs-$ns-$pod.txt" k logs -n "$ns" "$pod" --all-containers --tail=200
+            done
+          sudo chown -R "$(id -u):$(id -g)" "$LOG_DIR"
+
+      - name: Upload logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: e2e-logs-${{ matrix.runner }}
+          path: e2e-logs/
+          retention-days: 7
+          if-no-files-found: ignore

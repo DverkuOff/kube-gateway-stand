@@ -1,0 +1,43 @@
+# cert-manager (oci://quay.io/jetstack/charts/cert-manager). Keys checked against the chart's values.yaml.
+# The chart manages its own CRDs; keep them on uninstall so certificates are not garbage-collected.
+crds:
+  enabled: true
+  keep: true
+
+prometheus:
+  enabled: true
+  servicemonitor:
+    enabled: true
+    interval: 60s
+
+# Chart defaults already satisfy the "restricted" Pod Security profile.
+resources:
+  requests:
+    cpu: 10m
+    memory: 48Mi
+  limits:
+    memory: 192Mi
+
+webhook:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 96Mi
+
+cainjector:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 48Mi
+    limits:
+      memory: 192Mi
+
+startupapicheck:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 24Mi
+    limits:
+      memory: 96Mi

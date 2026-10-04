@@ -1,0 +1,82 @@
+{{- $host := include "web.host" . -}}
+{{- $weight := include "web.weight" . | int -}}
+{{- $canary := .Values.canary.version -}}
+{{- $stable := .Values.canary.stable -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "web.labels" . | nindent 4 }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.gateway.name }}
+      namespace: {{ .Values.gateway.namespace }}
+      sectionName: {{ .Values.gateway.sectionName }}
+  hostnames:
+    - {{ $host | quote }}
+  rules:
+    # Header "X-Version: v2" pins the request to v2.
+    - name: by-header
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+          headers:
+            - type: Exact
+              name: X-Version
+              value: {{ $canary }}
+      filters:
+        {{- include "web.ruleFilters" . }}
+      backendRefs:
+        - name: web-{{ $canary }}
+          port: 80
+    # Query "?version=v2" pins the request to v2.
+    - name: by-query
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+          queryParams:
+            - type: Exact
+              name: version
+              value: {{ $canary }}
+      filters:
+        {{- include "web.ruleFilters" . }}
+      backendRefs:
+        - name: web-{{ $canary }}
+          port: 80
+    # /preview/... is served by v2 with the prefix removed.
+    - name: preview
+      matches:
+        - path:
+            type: PathPrefix
+            value: /preview
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /
+        {{- include "web.ruleFilters" . }}
+      backendRefs:
+        - name: web-{{ $canary }}
+          port: 80
+    # Everything else: weighted canary split (scripts/canary.sh patches these weights).
+    - name: canary
+      matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        {{- include "web.ruleFilters" . }}
+      backendRefs:
+        - name: web-{{ $stable }}
+          port: 80
+          weight: {{ sub 100 $weight }}
+        - name: web-{{ $canary }}
+          port: 80
+          weight: {{ $weight }}

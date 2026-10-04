@@ -1,0 +1,22 @@
+{{- /* One ConfigMap per dashboards/*.json (repository root, linked into the chart), picked up by the Grafana sidecar. */}}
+{{- if .Values.dashboards.enabled }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-{{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "observability.labels" $ | nindent 4 }}
+    grafana_dashboard: "1"
+  {{- with $.Values.dashboards.checksum }}
+  annotations:
+    checksum/dashboards: {{ . | quote }}
+  {{- end }}
+data:
+  {{ base $path }}: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
+{{- end }}

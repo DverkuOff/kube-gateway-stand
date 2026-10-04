@@ -1,0 +1,6 @@
+apiVersion: v2
+name: observability
+description: Grafana route, alert rules and dashboards on top of kube-prometheus-stack and Loki
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

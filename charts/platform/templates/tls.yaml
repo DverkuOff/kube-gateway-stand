@@ -1,0 +1,75 @@
+{{- $suffix := include "platform.hostSuffix" . -}}
+# 1. Self-signed issuer: signs only the CA certificate below.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.tls.selfSignedIssuer }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+# 2. CA certificate (kept in the cert-manager namespace, where ClusterIssuers read secrets).
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.tls.ca.name }}
+  namespace: {{ .Values.tls.ca.namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ .Values.tls.ca.commonName | quote }}
+  secretName: {{ .Values.tls.ca.name }}
+  duration: {{ .Values.tls.ca.duration }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: {{ .Values.tls.selfSignedIssuer }}
+---
+# 3. CA issuer for the whole cluster.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.tls.ca.name }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Values.tls.ca.name }}
+---
+# 4. Gateway certificate: every published host is a subdomain of hostSuffix.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Values.tls.certificate.secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "platform.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.tls.certificate.secretName }}
+  duration: {{ .Values.tls.certificate.duration }}
+  renewBefore: {{ .Values.tls.certificate.renewBefore }}
+  commonName: {{ printf "*.%s" $suffix | quote }}
+  dnsNames:
+    - {{ printf "*.%s" $suffix | quote }}
+    - {{ $suffix | quote }}
+  {{- with .Values.nodeIP }}
+  ipAddresses:
+    - {{ . | quote }}
+  {{- end }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+  issuerRef:
+    group: cert-manager.io
+    kind: ClusterIssuer
+    name: {{ .Values.tls.ca.name }}

@@ -1,0 +1,15 @@
+# PROFILE=small (2 vCPU / 4 GB): smaller requests, same topology.
+nginx:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+exporter:
+  resources:
+    requests:
+      cpu: 5m
+      memory: 12Mi
+    limits:
+      memory: 32Mi

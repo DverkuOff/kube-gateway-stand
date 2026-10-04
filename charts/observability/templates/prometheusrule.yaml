@@ -1,0 +1,72 @@
+{{- $svc := .Values.web.serviceRegex }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: web-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: web-gateway.recording
+      rules:
+        - record: web:traefik_requests:rate5m
+          expr: |
+            sum by (version, code) (
+              label_replace(
+                rate(traefik_service_requests_total{service=~"{{ $svc }}"}[5m]),
+                "version", "$1", "service", ".*-svc-web-web-(v[12])-.*"
+              )
+            )
+    - name: web-gateway.alerts
+      rules:
+        - alert: WebHighErrorRatio
+          expr: |
+            sum(rate(traefik_service_requests_total{service=~"{{ $svc }}", code=~"5.."}[5m]))
+              /
+            sum(rate(traefik_service_requests_total{service=~"{{ $svc }}"}[5m]))
+              > {{ .Values.alerts.errorRatio }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: More than {{ mulf .Values.alerts.errorRatio 100 }}% of requests to the web application fail with 5xx
+            description: '5xx share through the gateway is {{ "{{" }} $value | humanizePercentage {{ "}}" }} over the last 5 minutes.'
+        - alert: WebHighLatencyP95
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(traefik_service_request_duration_seconds_bucket{service=~"{{ $svc }}"}[5m]))
+            ) > {{ .Values.alerts.latencyP95 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: p95 latency of the web application is above {{ .Values.alerts.latencyP95 }}s
+            description: 'p95 latency through the gateway is {{ "{{" }} $value | humanizeDuration {{ "}}" }}.'
+        - alert: TraefikDown
+          expr: absent(up{namespace="gateway", job=~"traefik.*"} == 1)
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Traefik (Gateway API controller) metrics target is down or missing
+            description: No healthy Traefik scrape target in namespace gateway for 2 minutes; the application is probably unreachable.
+    - name: certificates.alerts
+      rules:
+        - alert: CertificateExpiringSoon
+          expr: |
+            (certmanager_certificate_expiration_timestamp_seconds - time()) < {{ mul .Values.alerts.certExpiryDays 86400 }}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Certificate {{ "{{" }} or $labels.exported_namespace $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }} expires soon'
+            description: 'Expires in {{ "{{" }} $value | humanizeDuration {{ "}}" }}; cert-manager should have renewed it already.'
+        - alert: CertificateNotReady
+          expr: certmanager_certificate_ready_status{condition="False"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: 'Certificate {{ "{{" }} or $labels.exported_namespace $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }} is not ready'
+            description: cert-manager reports Ready=False for 10 minutes; check "kubectl describe certificate".

@@ -1,0 +1,31 @@
+# Public host of Grafana, passed at deploy time: --set grafanaHost=grafana.<NODE_IP>.sslip.io
+grafanaHost: ""
+
+gateway:
+  name: web
+  namespace: gateway
+  sectionName: https
+
+grafana:
+  service: kps-grafana
+  port: 80
+
+# Selector for Traefik metrics of the demo application. Traefik names a Gateway API backend
+# "<router>-svc-<namespace>-<service>-<index>@kubernetesgateway", where the router name is
+# "httproute-<namespace>-<route>-gw-<gw-namespace>-<gw>-ep-<entrypoint>-<rule>-<hash>".
+web:
+  serviceRegex: ".*-svc-web-web-v[12]-[0-9]+@kubernetesgateway"
+
+alerts:
+  # share of 5xx responses of the web backends
+  errorRatio: 0.05
+  # p95 latency of the web backends, seconds
+  latencyP95: 0.5
+  # certificate expiry warning, days
+  certExpiryDays: 14
+
+dashboards:
+  enabled: true
+  # Set by scripts/50-monitoring.sh to a hash of dashboards/*.json, so that editing a dashboard
+  # changes the release inputs and a re-run upgrades it. Stored as an annotation.
+  checksum: ""

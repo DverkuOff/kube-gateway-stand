@@ -1,0 +1,103 @@
+name: lint
+
+# Static checks: the same as `make lint` (scripts/lint.sh), with pinned tool versions.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash  # explicit: adds -o pipefail
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHELLCHECK_VERSION: v0.11.0
+  SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  # linux.x86_64.tar.xz
+  ACTIONLINT_VERSION: 1.7.12
+  ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  # linux_amd64.tar.gz
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  # linux-amd64.tar.gz
+  YAMLLINT_VERSION: 1.38.0
+  LINT_STRICT: "1"  # a missing tool fails the job instead of being skipped
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Load pinned versions
+        run: grep -E '^HELM_VERSION=' versions.env >> "$GITHUB_ENV"
+
+      - name: Install linters (checksums verified)
+        id: tools
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          fetch() {  # fetch URL SHA256 OUTPUT
+            curl -fsSL --retry 3 -o "$3" "$1"
+            echo "$2  $3" | sha256sum -c -
+          }
+          fetch "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            "$SHELLCHECK_SHA256" shellcheck.tar.xz
+          tar -xJf shellcheck.tar.xz --strip-components=1 -C "$bin" "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          fetch "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            "$ACTIONLINT_SHA256" actionlint.tar.gz
+          tar -xzf actionlint.tar.gz -C "$bin" actionlint
+          fetch "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+            "$KUBECONFORM_SHA256" kubeconform.tar.gz
+          tar -xzf kubeconform.tar.gz -C "$bin" kubeconform
+          pipx install --force "yamllint==${YAMLLINT_VERSION}"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Tool versions
+        run: |
+          shellcheck --version | sed -n 2p
+          actionlint --version | head -n1
+          kubeconform -v
+          yamllint --version
+          helm version --short
+
+      # Every check runs even if an earlier one failed, so one push shows all problems.
+      - name: versions.env
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh versions
+
+      - name: shellcheck
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh shell
+
+      - name: yamllint
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh yaml
+
+      - name: JSON dashboards
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh json
+
+      - name: actionlint
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh actions
+
+      - name: helm lint, helm template | kubeconform
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh helm
+
+      - name: kubeconform manifests
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: scripts/lint.sh manifests

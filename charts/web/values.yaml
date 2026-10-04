@@ -1,0 +1,67 @@
+# Public host name of the application, e.g. app.192.0.2.10.sslip.io (required).
+host: ""
+
+# Images are overridden from versions.env by scripts/40-app.sh; the defaults only keep `helm lint` usable.
+nginx:
+  image: nginxinc/nginx-unprivileged:1.30.5-alpine
+  workerProcesses: 1
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+exporter:
+  enabled: true
+  image: nginx/nginx-prometheus-exporter:1.5.3
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      memory: 64Mi
+
+# One Deployment + Service per version. The response body is "Hello World! (<version>)".
+versions:
+  v1:
+    replicas: 2
+  v2:
+    replicas: 1
+
+# Share of "/" traffic sent to v2 (0-100); v1 gets the rest.
+canary:
+  stable: v1
+  version: v2
+  weight: 20
+
+# Traefik RateLimit middleware attached to every rule through ExtensionRef.
+rateLimit:
+  average: 20
+  burst: 40
+
+gateway:
+  name: web
+  namespace: gateway
+  sectionName: https
+
+# Added to every response.
+responseHeaders:
+  Strict-Transport-Security: max-age=31536000
+  X-Content-Type-Options: nosniff
+
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to reach the pods: the gateway (HTTP) and Prometheus (metrics).
+  gatewayNamespace: gateway
+  monitoringNamespace: monitoring
+  # Extra sources allowed to reach the HTTP port, e.g. the node address for kubelet probes.
+  nodeCIDRs: []
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+serviceMonitor:
+  enabled: true
+  interval: 30s

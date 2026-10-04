@@ -1,0 +1,6 @@
+apiVersion: v2
+name: web
+description: Demo web application (nginx v1/v2) published through Gateway API with canary weights, header/query/path routing and rate limiting.
+type: application
+version: 0.1.0
+appVersion: "1.30.5"

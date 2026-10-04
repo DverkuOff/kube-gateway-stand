@@ -1,0 +1,28 @@
+# yamllint configuration (used by scripts/lint.sh and the lint workflow).
+# Helm templates are Go templates, not plain YAML: they are checked by `helm lint` and kubeconform instead.
+extends: default
+
+ignore: |
+  .git/
+  out/
+  charts/*/templates/
+  charts/*/charts/
+
+rules:
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  braces:
+    max-spaces-inside: 1
+  indentation:
+    spaces: 2
+    indent-sequences: whatever
+  line-length:  # reported, but long values (regexes, URLs) do not fail the lint
+    level: warning
+    max: 180
+    allow-non-breakable-words: true
+    allow-non-breakable-inline-mappings: true
+  truthy:
+    allowed-values: ["true", "false"]
+    check-keys: false  # GitHub Actions uses the `on:` key

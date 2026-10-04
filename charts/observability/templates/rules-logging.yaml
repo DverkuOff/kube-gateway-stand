@@ -1,0 +1,68 @@
+{{- /*
+Alerts of the log pipeline (Fluentd -> Loki). Owner: logging.
+Fluentd's write_count is not used: it grows on failed flushes too. Delivery is judged by output
+errors on the Fluentd side and by lines received / discarded on the Loki side.
+fluentd_output_status_* are gauges (fluent-plugin-prometheus, gauge_all) that only grow until a
+restart, hence delta() rather than rate().
+*/ -}}
+{{- $svc := .Values.web.serviceRegex }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: logging-pipeline
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: logging-pipeline.alerts
+      rules:
+        - alert: FluentdOutputErrors
+          expr: |
+            sum by (pod) (delta(fluentd_output_status_num_errors{type="loki"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Fluentd cannot push logs to Loki
+            description: '{{ "{{" }} $labels.pod {{ "}}" }}: {{ "{{" }} $value {{ "}}" }} failed flushes to Loki in 5 minutes for 10 minutes; logs are buffered in /var/lib/fluentd (check: kubectl -n logging logs {{ "{{" }} $labels.pod {{ "}}" }}).'
+        - alert: FluentdBufferNearLimit
+          expr: |
+            min by (pod) (fluentd_output_status_buffer_available_space_ratio{type="loki"}) < 20
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Fluentd buffer for Loki is almost full
+            description: '{{ "{{" }} $labels.pod {{ "}}" }}: only {{ "{{" }} $value | humanize {{ "}}" }}% of the 256 MiB buffer is free; when it is full the oldest chunks are dropped.'
+        - alert: LokiDiscardingLines
+          expr: |
+            sum by (reason) (rate(loki_discarded_samples_total[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Loki rejects log lines
+            description: 'Loki discards {{ "{{" }} $value | humanize {{ "}}" }} lines/s, reason "{{ "{{" }} $labels.reason {{ "}}" }}" (limits, too old samples or rate limiting).'
+        - alert: LokiNotReceivingLogs
+          expr: |
+            sum(rate(fluentd_input_status_num_records_total[10m])) > 0
+              unless
+            sum(rate(loki_distributor_lines_received_total[10m])) > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: Fluentd reads container logs but Loki receives no lines
+            description: No lines reached the Loki distributor for 10 minutes while Fluentd was reading container logs (Loki down or unreachable from Fluentd).
+        - alert: WebLogsMissing
+          expr: |
+            sum(rate(traefik_service_requests_total{service=~"{{ $svc }}"}[10m])) > 0
+              unless
+            sum(rate(fluentd_input_status_num_records_total{source_namespace="web", log_type="access"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: The web application serves traffic but its access log does not reach the pipeline
+            description: The gateway routes requests to the web backends, but no access-log lines of namespace web were collected for 10 minutes (Fluentd parsing or tailing problem).

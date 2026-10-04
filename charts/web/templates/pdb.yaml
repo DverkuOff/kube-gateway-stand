@@ -1,0 +1,20 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{- range $version, $cfg := .Values.versions }}
+{{- if gt (int $cfg.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: web-{{ $version }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "web.labels" $ | nindent 4 }}
+    app.kubernetes.io/version: {{ $version }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "web.selector" (dict "version" $version) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

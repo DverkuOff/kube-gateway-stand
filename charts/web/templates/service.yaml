@@ -1,0 +1,26 @@
+{{- range $version, $cfg := .Values.versions }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-{{ $version }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "web.labels" $ | nindent 4 }}
+    app.kubernetes.io/version: {{ $version }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "web.selector" (dict "version" $version) | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    {{- if $.Values.exporter.enabled }}
+    - name: metrics
+      port: 9113
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+{{- end }}

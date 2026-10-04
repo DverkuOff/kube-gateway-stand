@@ -9,8 +9,12 @@ SUDO := $(shell [ "$$(id -u)" -eq 0 ] || echo sudo)
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
+# Settings passed through sudo, e.g. make deploy PROFILE=small CANARY_WEIGHT=50
+DEPLOY_VARS := NODE_IP POD_CIDR SVC_CIDR PROFILE DOCKERHUB_MIRROR CONTAINERD_SOURCE ONLY_STAGES CANARY_WEIGHT
+DEPLOY_ENV := $(foreach v,$(DEPLOY_VARS),$(if $(value $(v)),$(v)='$($(v))'))
+
 deploy: ## Deploy everything on this host (idempotent, safe to re-run)
-	$(SUDO) ./deploy.sh
+	$(SUDO) env $(DEPLOY_ENV) ./deploy.sh
 
 check: ## Smoke-check all components (Gateway, app, TLS, metrics, logs)
 	./scripts/check.sh

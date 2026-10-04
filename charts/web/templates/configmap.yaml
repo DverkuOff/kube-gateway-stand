@@ -1,0 +1,14 @@
+{{- range $version, $cfg := .Values.versions }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-{{ $version }}-nginx
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "web.labels" $ | nindent 4 }}
+    app.kubernetes.io/version: {{ $version }}
+data:
+  nginx.conf: |
+    {{- include "web.nginxConf" (dict "version" $version "root" $) | nindent 4 }}
+{{- end }}
