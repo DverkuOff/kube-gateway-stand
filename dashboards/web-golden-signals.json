@@ -240,8 +240,8 @@
     {
       "id": 5,
       "type": "stat",
-      "title": "Canary share (v2)",
-      "description": "Actual share of requests served by web-v2 (weights, header, query and /preview routes).",
+      "title": "Canary: v2 share of / (10 min)",
+      "description": "Share of web-v2 among requests of the weighted rule 'canary' of HTTPRoute web (path / without X-Version, ?version or /preview) over the last 10 minutes. Compare with the v2 weight in the HTTPRoute (CANARY_WEIGHT, 20 by default). Pinned requests are not counted here: see 'Requests by version'.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -258,7 +258,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(traefik_service_requests_total{service=~\".*-svc-web-web-v2-[0-9]+@kubernetesgateway\"}[$__rate_interval])) / sum(rate(traefik_service_requests_total{service=~\".*-svc-web-web-v[12]-[0-9]+@kubernetesgateway\"}[$__rate_interval]))",
+          "expr": "sum(increase(traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v2-[0-9]+@kubernetesgateway\"}[10m])) / sum(increase(traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v[12]-[0-9]+@kubernetesgateway\"}[10m]))",
           "legendFormat": "",
           "refId": "A",
           "range": true
@@ -506,7 +506,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Requests by version",
-      "description": "Canary split v1/v2 as seen by the gateway.",
+      "description": "All requests by version as seen by the gateway, including those pinned to v2 (X-Version, ?version, /preview).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
