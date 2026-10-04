@@ -173,16 +173,39 @@ helm_release() {
     ok "helm release $ns/$name unchanged"
     return 0
   fi
-  local vflag=()
+  local vflag=() errlog
   [[ -n "$version" && ! -d "$chart" ]] && vflag=(--version "$version")
+  errlog="$(mktemp)"
   # Explicit failure handling: callers may run this where `set -e` is suspended.
   if ! helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" upgrade --install "$name" "$chart" \
-    -n "$ns" --create-namespace "${vflag[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}" "${args[@]}" >/dev/null; then
-    rm -f "$stamp"
+    -n "$ns" --create-namespace "${vflag[@]}" --wait --timeout "${HELM_TIMEOUT:-10m}" "${args[@]}" >/dev/null 2>"$errlog"; then
+    cat "$errlog" >&2
+    rm -f "$errlog" "$stamp"
     die "helm release $ns/$name failed; inspect: kubectl -n $ns get pods,events; then re-run ./deploy.sh"
   fi
+  helm_stderr "$ns/$name" <"$errlog"
+  rm -f "$errlog"
   printf '%s' "$fp" >"$stamp"
   changed "helm release $ns/$name (${version:-local})"
+}
+
+# helm_stderr RELEASE < stderr of a successful helm run
+# Pod Security warnings (namespaces that enforce "privileged" keep warn=restricted on purpose) are
+# shown as one readable line; informational client-go/Helm log lines (klog "I...", level=INFO, such
+# as a watch that the API server closed and the client re-opened) are dropped; anything else is shown.
+helm_stderr() {
+  local release=$1 line
+  while IFS= read -r line; do
+    if [[ "$line" == *'would violate PodSecurity'* ]]; then
+      line="${line#*would violate PodSecurity }"
+      line="${line//\\\"/\"}"
+      warn "$release: allowed, but outside Pod Security ${line%\"}"
+    elif [[ "$line" =~ ^I[0-9]{4}\  || "$line" == *'level=INFO'* || -z "$line" ]]; then
+      continue
+    else
+      printf '%s\n' "$line" >&2
+    fi
+  done
 }
 
 # ---------- configuration ----------
