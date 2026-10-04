@@ -150,6 +150,7 @@ kapply() {
 # helm_release NAME NAMESPACE CHART VERSION [extra helm args...]
 # Skips the upgrade when chart, version, values files and --set arguments are unchanged and the
 # release is deployed, so a repeated run does not create new revisions.
+# KGS_HELM_FORCE=1 upgrades anyway (a stage detected drift of the live objects).
 helm_release() {
   local name=$1 ns=$2 chart=$3 version=$4
   shift 4
@@ -168,7 +169,7 @@ helm_release() {
     } | sha256sum | cut -d' ' -f1
   )"
   status="$(helm --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" status "$name" -n "$ns" -o json 2>/dev/null | jq -r '.info.status // empty' || true)"
-  if [[ "$status" == "deployed" && -f "$stamp" && "$(cat "$stamp")" == "$fp" ]]; then
+  if [[ "${KGS_HELM_FORCE:-}" != 1 && "$status" == "deployed" && -f "$stamp" && "$(cat "$stamp")" == "$fp" ]]; then
     ok "helm release $ns/$name unchanged"
     return 0
   fi

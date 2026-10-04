@@ -28,6 +28,22 @@ app_args=(
 [[ "$PROFILE" == small ]] && app_args+=(-f "$REPO_ROOT/charts/web/values-small.yaml")
 helm_release web web "$REPO_ROOT/charts/web" "" "${app_args[@]}"
 
+# scripts/canary.sh changes the weights in place; the release inputs stay the same, so the step
+# above skips the upgrade. Compare the live weight with the wanted one and take it back if needed.
+app_live_weight() {
+  kc -n web get httproute web -o json 2>/dev/null | jq -r '
+    [.spec.rules[]? | select(.name == "canary") | .backendRefs[]? | select(.name == "web-v2") | .weight][0] // empty'
+}
+app_live="$(app_live_weight)"
+if [[ -n "$app_live" && "$app_live" != "$app_weight" ]]; then
+  info "canary weight of v2 is ${app_live}% in the cluster (changed by scripts/canary.sh), restoring ${app_weight}%"
+  KGS_HELM_FORCE=1 helm_release web web "$REPO_ROOT/charts/web" "" "${app_args[@]}"
+  app_live="$(app_live_weight)"
+  [[ "$app_live" == "$app_weight" ]] || die "HTTPRoute web/web still has v2 weight ${app_live}% after the upgrade (expected ${app_weight}%)"
+else
+  ok "canary weight of v2 in HTTPRoute web/web: ${app_live:-?}%"
+fi
+
 # shellcheck disable=SC2329  # invoked indirectly through wait_for
 app_route_ready() {
   kc -n web get httproute web -o json | jq -e '
