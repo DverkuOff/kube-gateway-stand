@@ -497,10 +497,21 @@ c_psa() {
 }
 
 c_netpol() {
-  local names
-  names="$(k get networkpolicy -n web -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true)"
-  [[ -n "$names" ]] || { MSG="no NetworkPolicy in ns web"; return 1; }
-  MSG="ns web: ${names% }"
+  local ns names bad=""
+  MSG=""
+  for ns in web monitoring logging; do
+    names="$(k get networkpolicy -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true)"
+    if [[ -n "$names" ]]; then
+      MSG+="ns $ns: ${names% }"$'\n'
+    else
+      bad+=" $ns"
+    fi
+  done
+  MSG="${MSG%$'\n'}"
+  if [[ -n "$bad" ]]; then
+    MSG+=$'\n'"no NetworkPolicy in ns:$bad"
+    return 1
+  fi
 }
 
 # Passes when a TCP connection to NODE_IP:2381 is refused or times out.
@@ -567,7 +578,7 @@ section "9. Security"
 check 9.1 "Prometheus/Loki/Alertmanager not exposed" c_no_internal_routes
 check 9.2 "Grafana requires login" c_grafana_auth
 check 9.3 "Pod Security Admission labels on namespaces" c_psa
-check 9.4 "NetworkPolicy in ns web" c_netpol
+check 9.4 "NetworkPolicy in ns web, monitoring, logging" c_netpol
 check 9.5 "etcd metrics port 2381 closed on the node IP" c_etcd_port
 check 9.6 "node-exporter port 9100 not open without authentication" c_node_exporter_port
 

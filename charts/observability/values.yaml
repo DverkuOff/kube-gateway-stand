@@ -9,6 +9,11 @@ gateway:
 grafana:
   service: kps-grafana
   port: 80
+  # Added to every response of the Grafana route (as on the application routes). Logins are
+  # throttled by Grafana itself (brute-force protection is on by default).
+  responseHeaders:
+    Strict-Transport-Security: max-age=31536000
+    X-Content-Type-Options: nosniff
 
 # Selector for Traefik metrics of the demo application. Traefik names a Gateway API backend
 # "<router>-svc-<namespace>-<service>-<index>@kubernetesgateway", where the router name is
@@ -23,6 +28,13 @@ alerts:
   latencyP95: 0.5
   # certificate expiry warning, days
   certExpiryDays: 14
+
+networkPolicy:
+  enabled: true
+  # Loki lives here (Prometheus is in the release namespace).
+  lokiNamespace: logging
+  # The only namespaces that may reach Loki and Prometheus.
+  allowedNamespaces: [monitoring, logging]
 
 dashboards:
   enabled: true

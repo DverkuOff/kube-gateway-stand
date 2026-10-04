@@ -1,0 +1,49 @@
+{{- if .Values.networkPolicy.enabled }}
+# Loki and Prometheus answer queries (Loki also accepts pushes) without authentication, so only the
+# monitoring and logging namespaces may reach them: Grafana, Prometheus scrapes, Fluentd pushes.
+# Traffic from the node itself (kubelet probes, the API server proxy used by make check and the demo
+# scripts) is always allowed by NetworkPolicy semantics.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-ingress
+  namespace: {{ .Values.networkPolicy.lokiNamespace }}
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  {{- toYaml .Values.networkPolicy.allowedNamespaces | nindent 18 }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values:
+                  {{- toYaml .Values.networkPolicy.allowedNamespaces | nindent 18 }}
+{{- end }}

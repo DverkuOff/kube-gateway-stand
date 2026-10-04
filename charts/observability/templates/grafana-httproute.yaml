@@ -22,6 +22,16 @@ spec:
         - path:
             type: PathPrefix
             value: /
+      {{- with .Values.grafana.responseHeaders }}
+      filters:
+        - type: ResponseHeaderModifier
+          responseHeaderModifier:
+            set:
+              {{- range $name, $value := . }}
+              - name: {{ $name }}
+                value: {{ $value | quote }}
+              {{- end }}
+      {{- end }}
       backendRefs:
         - name: {{ .Values.grafana.service }}
           port: {{ .Values.grafana.port }}
