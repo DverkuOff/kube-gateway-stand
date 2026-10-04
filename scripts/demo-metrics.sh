@@ -104,27 +104,29 @@ show 'count by (job) (up == 1)' '"    \(.metric.job // "-"): \(.value[1])"'
 down="$(promql 'up == 0' | jq -r '.[] | "    DOWN \(.metric.job) \(.metric.instance)"')"
 [[ -z "$down" ]] || printf '%s\n' "$down"
 
-title "Requests through the gateway by status code (last 5 min)"
-show "sum by (code) (round(increase(traefik_service_requests_total{service=~\"${SVC}\"}[5m])))" \
+# Request counts are read from the counters themselves (totals since the gateway started), not
+# with increase(): on a fresh cluster a series that appears during the demo traffic has a single
+# sample, and increase()/rate() would miss it. The Grafana dashboard shows the rates over time.
+title "Requests through the gateway by status code (counters since the gateway started)"
+show "sum by (code) (traefik_service_requests_total{service=~\"${SVC}\"})" \
   '"    HTTP \(.metric.code): \(.value[1])"'
 
-title "Requests by version (last 5 min)"
-show "sum by (version) (label_replace(round(increase(traefik_service_requests_total{service=~\"${SVC}\"}[5m])), \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\"))" \
+title "Requests by version (counters since the gateway started)"
+show "sum by (version) (label_replace(traefik_service_requests_total{service=~\"${SVC}\"}, \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\"))" \
   '"    \(.metric.version): \(.value[1])"'
 
-title "Share of v2 among all requests (last 5 min; includes the X-Version, ?version and /preview requests pinned to v2)"
-show "sum(rate(traefik_service_requests_total{service=~\"${SVC_V2}\"}[5m])) / sum(rate(traefik_service_requests_total{service=~\"${SVC}\"}[5m]))" \
+title "Share of v2 among all requests (includes the X-Version, ?version and /preview requests pinned to v2)"
+show "sum(traefik_service_requests_total{service=~\"${SVC_V2}\"}) / sum(traefik_service_requests_total{service=~\"${SVC}\"})" \
   '"    \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 100 | floor)%" end) of requests went to v2"'
 
 # Traefik names the router of an HTTPRoute rule after the rule index:
 #   httproute-<ns>-<route>-gw-<gw-ns>-<gw>-ep-<entrypoint>-<rule index>-<hash>
-# so the weighted rule "canary" can be measured on its own. Counters since the gateway started:
-# series created during the demo traffic would be undercounted by increase().
+# so the weighted rule "canary" can be measured on its own.
 canary_idx="$(kubectl -n web get httproute web -o json 2>/dev/null | jq -r '[.spec.rules[].name] | index("canary") // empty' || true)"
 canary_w="$(kubectl -n web get httproute web -o json 2>/dev/null | jq -r '[.spec.rules[] | select(.name == "canary") | .backendRefs[] | select(.name == "web-v2") | .weight][0] // empty' || true)"
 if [[ -n "$canary_idx" ]]; then
   rule_re="httproute-web-web-gw-gateway-web-ep-websecure-${canary_idx}-[0-9a-f]+-svc-web-web"
-  title "Weighted split of the rule \"canary\" (\"/\" without pins; v2 weight in the HTTPRoute: ${canary_w:-?}%, counters since the gateway started)"
+  title "Weighted split of the rule \"canary\" (\"/\" without pins; v2 weight in the HTTPRoute: ${canary_w:-?}%)"
   show "sum(traefik_service_requests_total{service=~\"${rule_re}-v2-[0-9]+@kubernetesgateway\"}) / sum(traefik_service_requests_total{service=~\"${rule_re}-v[12]-[0-9]+@kubernetesgateway\"})" \
     '"    \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 1000 | round / 10)%" end) of the weighted requests went to v2"'
 fi
@@ -133,8 +135,7 @@ title "p95 latency by version (last 5 min)"
 show "histogram_quantile(0.95, sum by (le, version) (label_replace(rate(traefik_service_request_duration_seconds_bucket{service=~\"${SVC}\"}[5m]), \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\")))" \
   '"    \(.metric.version): \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 1000 | floor) ms" end)"'
 
-# A counter, not increase(): the 429 series appears with the first rejected request, and
-# increase() does not count the samples before the first scrape of a new series.
+# 429 never reaches a backend: it is counted on the entry point.
 title "Rejected by the rate limit, HTTP 429 (counter since the gateway started)"
 show 'sum(traefik_entrypoint_requests_total{entrypoint="websecure",code="429"})' \
   '"    429 responses: \(.value[1])"'
