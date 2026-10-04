@@ -205,7 +205,11 @@ for fw in ufw firewalld; do
     systemctl is-active --quiet firewalld 2>/dev/null && fw_active=1
   fi
   if ((fw_active)); then
-    warn "$fw is active: the deployment is tested without a host firewall. If the gateway (80/443) or pod traffic is blocked, check its rules first"
+    if [[ "$fw" == ufw ]]; then
+      info "ufw is active: tested with ufw (default deny incoming); the gateway ports 80/443 are published through hostPort (DNAT) and need no ufw rules"
+    else
+      warn "$fw is active: the deployment is not tested with it. If the gateway (80/443) or pod traffic is blocked, check its rules first"
+    fi
   fi
 done
 
