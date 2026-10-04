@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage 60-logging — Loki and Fluentd
-# Owner: track D. Sourced by deploy.sh; can also run alone: sudo ./scripts/60-logging.sh
+# Sourced by deploy.sh; can also run alone: sudo ./scripts/60-logging.sh
 #
 #   Fluentd (DaemonSet, ns logging) --push--> Loki (Monolithic, Service loki:3100, ns logging)
 #   Grafana (stage 50) reads Loki through its datasource; alerts are in charts/observability.

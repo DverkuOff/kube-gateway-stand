@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage 40-app — demo web app v1/v2 and its HTTPRoutes
-# Owner: track B. Sourced by deploy.sh; can also run alone: sudo ./scripts/40-app.sh
+# Sourced by deploy.sh; can also run alone: sudo ./scripts/40-app.sh
 #   CANARY_WEIGHT=0..100  share of "/" traffic sent to v2 (default 20)
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

@@ -1,37 +1,15 @@
 #!/usr/bin/env bash
 # Stage 00-preflight — OS, resources, ports, networks, registry access
-# Owner: track A. Sourced by deploy.sh; can also run alone: sudo ./scripts/00-preflight.sh
+# Sourced by deploy.sh; can also run alone: sudo ./scripts/00-preflight.sh
 # Changes nothing on the host except the decisions it exports (NODE_IP, CONTAINERD_SOURCE).
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 stage_standalone_init
 
-ADMIN_CONF=/etc/kubernetes/admin.conf
-
-# ---------- helpers (also defined in 20-cluster.sh, which can run on its own) ----------
+# ---------- helpers (cluster_ready, cluster_traces: scripts/lib.sh) ----------
 
 # True if VAR was given by the user (present in the environment this shell started with).
 env_explicit() { grep -qz "^$1=" "/proc/$$/environ" 2>/dev/null; }
-
-kgs_kubectl() { kubectl --kubeconfig "$ADMIN_CONF" --request-timeout=5s "$@"; }
-
-# Ready = API /readyz answers "ok" + ConfigMap kubeadm-config + Deployment CoreDNS exist.
-# admin.conf alone is not enough: kubeadm writes it before etcd and the control plane are up.
-cluster_ready() {
-  [[ -f "$ADMIN_CONF" ]] && have kubectl || return 1
-  [[ "$(kgs_kubectl get --raw=/readyz 2>/dev/null)" == ok ]] || return 1
-  kgs_kubectl -n kube-system get configmap kubeadm-config >/dev/null 2>&1 || return 1
-  kgs_kubectl -n kube-system get deployment coredns >/dev/null 2>&1
-}
-
-cluster_traces() {
-  local f
-  for f in "$ADMIN_CONF" /etc/kubernetes/manifests/kube-apiserver.yaml /etc/kubernetes/manifests/etcd.yaml \
-    /var/lib/etcd/member /var/lib/kubelet/config.yaml; do
-    [[ -e "$f" ]] && return 0
-  done
-  return 1
-}
 
 # Prints none | ready | broken. After a reboot the API needs a minute: wait up to 180 s for it.
 cluster_state() {

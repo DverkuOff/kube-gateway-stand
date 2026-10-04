@@ -123,6 +123,29 @@ apt_install() {
 # ---------- cluster helpers ----------
 kc() { kubectl --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" "$@"; }
 
+# Cluster state, shared by 00-preflight and 20-cluster (each can also run on its own).
+ADMIN_CONF=/etc/kubernetes/admin.conf
+kgs_kubectl() { kubectl --kubeconfig "$ADMIN_CONF" --request-timeout=5s "$@"; }
+
+# Ready = API /readyz answers "ok" + ConfigMap kubeadm-config + Deployment CoreDNS exist.
+# admin.conf alone is not enough: kubeadm writes it before etcd and the control plane are up.
+cluster_ready() {
+  [[ -f "$ADMIN_CONF" ]] && have kubectl || return 1
+  [[ "$(kgs_kubectl get --raw=/readyz 2>/dev/null)" == ok ]] || return 1
+  kgs_kubectl -n kube-system get configmap kubeadm-config >/dev/null 2>&1 || return 1
+  kgs_kubectl -n kube-system get deployment coredns >/dev/null 2>&1
+}
+
+# Files a previous (possibly failed) kubeadm init leaves behind.
+cluster_traces() {
+  local f
+  for f in "$ADMIN_CONF" /etc/kubernetes/manifests/kube-apiserver.yaml /etc/kubernetes/manifests/etcd.yaml \
+    /var/lib/etcd/member /var/lib/kubelet/config.yaml; do
+    [[ -e "$f" ]] && return 0
+  done
+  return 1
+}
+
 # kapply FILE|DIR|- [LABEL]  — server-side apply; reports changed only when the live objects differ.
 # LABEL names the objects in the output (default: the file name; give it for stdin).
 kapply() {

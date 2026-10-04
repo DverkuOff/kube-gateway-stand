@@ -1,31 +1,15 @@
 #!/usr/bin/env bash
 # Stage 20-cluster — kubeadm init, kubeconfig, Calico, local-path storage
-# Owner: track A. Sourced by deploy.sh; can also run alone: sudo ./scripts/20-cluster.sh
+# Sourced by deploy.sh; can also run alone: sudo ./scripts/20-cluster.sh
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 stage_standalone_init
 
-ADMIN_CONF=/etc/kubernetes/admin.conf
 # Chart archives of the Calico release (the same charts as the https://docs.tigera.io/calico/charts
 # repository, whose index.yaml is slow to download from some networks).
 CALICO_CHARTS="https://github.com/projectcalico/calico/releases/download/${CALICO_VERSION}"
 
-# ---------- cluster state (same rules as 00-preflight.sh) ----------
-kgs_kubectl() { kubectl --kubeconfig "$ADMIN_CONF" --request-timeout=5s "$@"; }
-cluster_ready() {
-  [[ -f "$ADMIN_CONF" ]] && have kubectl || return 1
-  [[ "$(kgs_kubectl get --raw=/readyz 2>/dev/null)" == ok ]] || return 1
-  kgs_kubectl -n kube-system get configmap kubeadm-config >/dev/null 2>&1 || return 1
-  kgs_kubectl -n kube-system get deployment coredns >/dev/null 2>&1
-}
-cluster_traces() {
-  local f
-  for f in "$ADMIN_CONF" /etc/kubernetes/manifests/kube-apiserver.yaml /etc/kubernetes/manifests/etcd.yaml \
-    /var/lib/etcd/member /var/lib/kubelet/config.yaml; do
-    [[ -e "$f" ]] && return 0
-  done
-  return 1
-}
+# Cluster state: cluster_ready, cluster_traces and ADMIN_CONF come from scripts/lib.sh (same rules as 00-preflight).
 
 have kubeadm || die "kubeadm is not installed: run stage 10-node first (sudo ./deploy.sh)"
 have helm || die "helm is not installed: run stage 10-node first (sudo ./deploy.sh)"
