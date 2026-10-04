@@ -40,7 +40,7 @@ if [[ -n "$grafana_pass" ]]; then
 else
   printf '  Login:     secret monitoring/grafana-admin not found (stage 50-monitoring creates it)\n'
 fi
-printf '  Dashboards: "Web: golden signals", "Traefik Official Kubernetes Dashboard", Kubernetes / Compute Resources / *\n'
+printf '  Dashboards: "Web: golden signals", "Traefik Official Kubernetes Dashboard", "Logs: pipeline", Kubernetes / Compute Resources / *\n'
 
 printf '\n%sPrometheus and Loki (not published through the Gateway)%s\n' "$b" "$n"
 printf '  Prometheus: kubectl -n monitoring port-forward svc/kps-prometheus 9090:9090   -> http://localhost:9090\n'

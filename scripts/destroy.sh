@@ -72,7 +72,7 @@ while read -r mnt; do
   umount "$mnt" && changed "unmounted $mnt"
 done < <(findmnt -rn -o TARGET | grep -E '^/(var/)?run/calico(/|$)' | sort -r || true)
 for p in /etc/cni/net.d/10-calico.conflist /etc/cni/net.d/calico-kubeconfig /var/lib/calico /run/calico \
-  /var/log/calico /run/nodeagent /opt/local-path-provisioner "$STATE_DIR"; do
+  /var/log/calico /run/nodeagent /opt/local-path-provisioner /var/lib/fluentd "$STATE_DIR"; do
   if [[ -e "$p" ]]; then
     rm -rf "$p"
     changed "removed $p"

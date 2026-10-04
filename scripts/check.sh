@@ -182,7 +182,8 @@ c_pods() {
 c_helm() {
   local list problems="" r ns name st
   have helm || { MSG="helm is not installed for this user"; return 2; }
-  list="$(helm list -A -a -o json 2>"$TMP/err")" || { MSG="helm list failed: $(head -c 200 "$TMP/err")"; return 2; }
+  # Helm 4 has no --all/-a; list every state that matters explicitly (also valid for Helm 3).
+  list="$(helm list -A --deployed --failed --pending -o json 2>"$TMP/err")" || { MSG="helm list failed: $(head -c 200 "$TMP/err")"; return 2; }
   for r in tigera-operator/calico cert-manager/cert-manager gateway/traefik gateway/platform web/web \
     monitoring/kps monitoring/observability logging/loki logging/fluentd; do
     ns=${r%/*} name=${r#*/}

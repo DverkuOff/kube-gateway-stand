@@ -123,23 +123,25 @@ apt_install() {
 # ---------- cluster helpers ----------
 kc() { kubectl --kubeconfig "${KUBECONFIG:-/etc/kubernetes/admin.conf}" "$@"; }
 
-# kapply FILE|DIR|-  — server-side apply; reports changed only when the live objects differ.
+# kapply FILE|DIR|- [LABEL]  — server-side apply; reports changed only when the live objects differ.
+# LABEL names the objects in the output (default: the file name; give it for stdin).
 kapply() {
-  local src=$1 tmp rc
+  local src=$1 tmp rc label
+  label="${2:-$(basename "$1")}"
   if [[ "$src" == "-" ]]; then
     tmp="$(mktemp)"; cat >"$tmp"; src="$tmp"
   fi
   rc=0
   kc diff --server-side --field-manager="$FIELD_MANAGER" --force-conflicts -f "$src" >/dev/null 2>&1 || rc=$?
   if ((rc == 0)); then
-    ok "applied (no changes): $(basename "$1")"
+    ok "applied (no changes): $label"
   elif ((rc == 1)); then
     kc apply --server-side --field-manager="$FIELD_MANAGER" --force-conflicts -f "$src" >/dev/null
-    changed "applied: $(basename "$1")"
+    changed "applied: $label"
   else
     # diff itself failed (e.g. CRD not yet known): apply and let apply report the real error.
     kc apply --server-side --field-manager="$FIELD_MANAGER" --force-conflicts -f "$src" >/dev/null
-    changed "applied: $(basename "$1")"
+    changed "applied: $label"
   fi
   [[ -n "${tmp:-}" ]] && rm -f "$tmp"
   return 0

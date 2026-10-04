@@ -82,12 +82,17 @@ metrics:
     addEntryPointsLabels: true
     addRoutersLabels: true
     addServicesLabels: true
-    buckets: "0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5"
+    # 0.3 and 1.2 are the Apdex thresholds of the official Traefik dashboard (Grafana 17347).
+    buckets: "0.005,0.01,0.025,0.05,0.1,0.25,0.3,0.5,1,1.2,2.5,5"
     service:
       enabled: true
     serviceMonitor:
       enabled: true
       interval: 30s
+      # Traefik's own "service" label (the backend) would otherwise clash with the target label
+      # "service" (traefik-metrics) and be renamed to exported_service; dashboards and alerts
+      # query service="...-svc-web-web-v1-0@kubernetesgateway".
+      honorLabels: true
 
 resources:
   requests:

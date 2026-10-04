@@ -105,16 +105,31 @@ title "Requests by version (last 5 min)"
 show "sum by (version) (label_replace(round(increase(traefik_service_requests_total{service=~\"${SVC}\"}[5m])), \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\"))" \
   '"    \(.metric.version): \(.value[1])"'
 
-title "Canary share: v2 / all (last 5 min)"
+title "Share of v2 among all requests (last 5 min; includes the X-Version, ?version and /preview requests pinned to v2)"
 show "sum(rate(traefik_service_requests_total{service=~\"${SVC_V2}\"}[5m])) / sum(rate(traefik_service_requests_total{service=~\"${SVC}\"}[5m]))" \
   '"    \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 100 | floor)%" end) of requests went to v2"'
+
+# Traefik names the router of an HTTPRoute rule after the rule index:
+#   httproute-<ns>-<route>-gw-<gw-ns>-<gw>-ep-<entrypoint>-<rule index>-<hash>
+# so the weighted rule "canary" can be measured on its own. Counters since the gateway started:
+# series created during the demo traffic would be undercounted by increase().
+canary_idx="$(kubectl -n web get httproute web -o json 2>/dev/null | jq -r '[.spec.rules[].name] | index("canary") // empty' || true)"
+canary_w="$(kubectl -n web get httproute web -o json 2>/dev/null | jq -r '[.spec.rules[] | select(.name == "canary") | .backendRefs[] | select(.name == "web-v2") | .weight][0] // empty' || true)"
+if [[ -n "$canary_idx" ]]; then
+  rule_re="httproute-web-web-gw-gateway-web-ep-websecure-${canary_idx}-[0-9a-f]+-svc-web-web"
+  title "Weighted split of the rule \"canary\" (\"/\" without pins; v2 weight in the HTTPRoute: ${canary_w:-?}%, counters since the gateway started)"
+  show "sum(traefik_service_requests_total{service=~\"${rule_re}-v2-[0-9]+@kubernetesgateway\"}) / sum(traefik_service_requests_total{service=~\"${rule_re}-v[12]-[0-9]+@kubernetesgateway\"})" \
+    '"    \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 1000 | round / 10)%" end) of the weighted requests went to v2"'
+fi
 
 title "p95 latency by version (last 5 min)"
 show "histogram_quantile(0.95, sum by (le, version) (label_replace(rate(traefik_service_request_duration_seconds_bucket{service=~\"${SVC}\"}[5m]), \"version\", \"\$1\", \"service\", \".*-svc-web-web-(v[12])-.*\")))" \
   '"    \(.metric.version): \(if .value[1] == "NaN" then "n/a" else "\((.value[1] | tonumber) * 1000 | floor) ms" end)"'
 
-title "Rejected by the rate limit, HTTP 429 (last 5 min)"
-show 'sum(round(increase(traefik_entrypoint_requests_total{entrypoint="websecure",code="429"}[5m])))' \
+# A counter, not increase(): the 429 series appears with the first rejected request, and
+# increase() does not count the samples before the first scrape of a new series.
+title "Rejected by the rate limit, HTTP 429 (counter since the gateway started)"
+show 'sum(traefik_entrypoint_requests_total{entrypoint="websecure",code="429"})' \
   '"    429 responses: \(.value[1])"'
 
 printf '\nThe same queries are on the Grafana dashboard "Web: golden signals" (./scripts/creds.sh shows the URL and login).\n'

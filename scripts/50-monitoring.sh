@@ -47,7 +47,7 @@ fi
 # The dashboard/datasource sidecars only need ConfigMaps in this namespace. The Grafana chart's
 # own namespaced Role would also grant Secrets, so the release binds to this Role instead.
 step "monitoring: Grafana sidecar Role"
-kapply - <<EOF
+kapply - "Role $MON_NS/grafana-sidecar" <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

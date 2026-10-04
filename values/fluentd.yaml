@@ -68,9 +68,13 @@ volumes:
     hostPath:
       path: /var/lib/fluentd
       type: DirectoryOrCreate
+  # Ruby refuses a world-writable temporary directory without the sticky bit, and a disk-backed
+  # emptyDir is 0777. A memory-backed emptyDir is a tmpfs with mode 1777; Fluentd keeps only a
+  # lock directory there (buffers are in /var/lib/fluentd), so the size limit is small.
   - name: tmp
     emptyDir:
-      sizeLimit: 64Mi
+      medium: Memory
+      sizeLimit: 16Mi
 volumeMounts:
   - name: varlogcontainers
     mountPath: /var/log/containers
