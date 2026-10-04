@@ -188,6 +188,24 @@ is_ipv4 "$NODE_IP" || die "NODE_IP='$NODE_IP' is not an IPv4 address"
 ip -4 -o addr show | awk '{ sub(/\/.*/, "", $4); print $4 }' | grep -qxF "$NODE_IP" ||
   die "NODE_IP=$NODE_IP is not assigned to any interface of this host (see 'ip -4 addr'). Set NODE_IP to a local address."
 ok "NODE_IP $NODE_IP is a local address"
+# A VM with two NICs (e.g. NAT + host-only) gets the NAT address from the default route, which the
+# browser on the host cannot reach. The address is baked into certificates and hosts at kubeadm init.
+mapfile -t host_addrs < <(ip -4 -o addr show scope global |
+  awk '$2 !~ /^(cali|vxlan|tunl|docker|br-|virbr|veth|cni|flannel|kube-)/ { sub(/\/.*/, "", $4); print $4 " (" $2 ")" }')
+if ((${#host_addrs[@]} > 1)) && [[ "$CLUSTER_STATE" == none ]] && ! env_explicit NODE_IP; then
+  warn "this host has several addresses: ${host_addrs[*]}. The gateway, certificates and sslip.io hosts will use NODE_IP=$NODE_IP (source of the default route). If clients reach the host by another address, run: sudo NODE_IP=<that address> ./deploy.sh"
+fi
+for fw in ufw firewalld; do
+  fw_active=0
+  if [[ "$fw" == ufw ]]; then
+    have ufw && ufw status 2>/dev/null | grep -q '^Status: active' && fw_active=1
+  else
+    systemctl is-active --quiet firewalld 2>/dev/null && fw_active=1
+  fi
+  if ((fw_active)); then
+    warn "$fw is active: the deployment is tested without a host firewall. If the gateway (80/443) or pod traffic is blocked, check its rules first"
+  fi
+done
 
 is_cidr "$POD_CIDR" || die "POD_CIDR='$POD_CIDR' is not an IPv4 CIDR"
 is_cidr "$SVC_CIDR" || die "SVC_CIDR='$SVC_CIDR' is not an IPv4 CIDR"
@@ -258,7 +276,16 @@ if have curl; then
   dockerhub_ok=0
   for url in "${targets[@]}"; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "$url" 2>/dev/null || true)"
-    if [[ "$code" =~ ^[1-5][0-9][0-9]$ ]]; then
+    if [[ "$code" == 403 || "$code" == 451 ]]; then
+      # Some registries answer 403/451 to whole regions: reachable, but pulls will be refused.
+      if [[ "$url" == *docker.io/v2/ && -n "$DOCKERHUB_MIRROR" ]]; then
+        info "Docker Hub denies access from here (HTTP $code): docker.io images come through the mirror $DOCKERHUB_MIRROR"
+      else
+        hint=""
+        [[ "$url" == *docker.io/v2/ ]] && hint=" (set DOCKERHUB_MIRROR to a mirror you can reach)"
+        warn "access denied: ${url%/v2/} (HTTP $code); pulls or downloads from it will likely fail$hint"
+      fi
+    elif [[ "$code" =~ ^[1-5][0-9][0-9]$ ]]; then
       ok "reachable: ${url%/v2/} (HTTP $code)"
       [[ "$url" == *docker.io/v2/ || ("$url" == "${DOCKERHUB_MIRROR%/}/v2/" && -n "$DOCKERHUB_MIRROR") ]] && dockerhub_ok=1
     else
