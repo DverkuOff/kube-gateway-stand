@@ -8,18 +8,25 @@
 опубликовано через **Gateway API** (Traefik) по HTTPS. Метрики собирает Prometheus, логи идут через Fluentd в Loki,
 всё это видно в Grafana. Повторный запуск ничего не ломает и ничего не меняет.
 
+**Kubernetes v1.36.5 (kubeadm)** · **Gateway API v1.6.2 (Traefik v3.7.13)** · cert-manager v1.21.2 ·
+kube-prometheus-stack 91.9.0 (Prometheus v3.15, Grafana 13.2) · Fluentd 1.19.3 → Loki 3.7.8 ·
+проверено на Ubuntu 24.04.5 amd64 и в CI на amd64/arm64
+
 ## Быстрый старт
+
+Команды выполняются на самом хосте с чистой Ubuntu 24.04 (ВМ или сервер: от 2 vCPU / 4 ГБ, диск от 30 ГБ),
+который станет узлом кластера, от пользователя с sudo:
 
 ```bash
 git clone https://github.com/DverkuOff/kube-gateway-stand.git
 cd kube-gateway-stand
-sudo ./deploy.sh     # 6–8 мин на 4 vCPU / 8 ГБ; заодно ставит make
+sudo ./deploy.sh     # 6–8 мин на 4 vCPU / 8 ГБ, на 2 vCPU / 4 ГБ — 9–10 мин; заодно ставит make
 make check           # 25 проверок: кластер, Gateway API, TLS, маршруты, метрики, логи
 ```
 
-Через 6–8 минут эксперт увидит в конце вывода `deploy.sh` адреса и команды, а `make check` закончится строкой
-`25 passed, 0 failed`. Пример с нашей ВМ, где адрес узла `192.168.122.10` (эти четыре команды, скопированные
-из README, на чистой Ubuntu 24.04):
+В конце вывода `deploy.sh` будут адреса и следующие команды, а `make check` закончится строкой
+`25 passed, 0 failed`. Так выглядит конец вывода на чистой Ubuntu 24.04 (ВМ с адресом `192.168.122.10`),
+где эти четыре команды выполнены дословно:
 
 ```text
 Done: ok=45 changed=48
@@ -72,51 +79,12 @@ Hello World! (v1)
 
 ## Архитектура
 
-```mermaid
-flowchart LR
-  user(["Пользователь<br/>curl / браузер"])
-
-  subgraph node["Ubuntu 24.04 · kubeadm v1.36.5 · один узел · Calico"]
-    subgraph gw["Gateway API · ns gateway"]
-      traefik["Traefik v3.7.13<br/>hostPort 80/443<br/>GatewayClass traefik · Gateway web"]
-    end
-    subgraph web["Приложение · ns web"]
-      v1["web-v1 ×2<br/>nginx"]
-      v2["web-v2 ×1<br/>nginx"]
-    end
-    subgraph mon["Мониторинг · ns monitoring"]
-      prom["Prometheus"]
-      graf["Grafana"]
-    end
-    subgraph log["Логи · ns logging"]
-      fluentd["Fluentd<br/>DaemonSet"]
-      loki["Loki"]
-    end
-    cm["cert-manager<br/>свой CA"]
-    files[("/var/log/pods")]
-  end
-
-  user -- "http://NODE_IP → 301" --> traefik
-  user -- "https://app.NODE_IP.sslip.io" --> traefik
-  user -- "https://grafana.NODE_IP.sslip.io" --> traefik
-  traefik -- "HTTPRoute web: 80/20, X-Version, ?version, /preview" --> v1
-  traefik --> v2
-  traefik -- "HTTPRoute grafana" --> graf
-  cm -. "Secret web-tls" .-> traefik
-
-  prom -. "scrape" .-> traefik
-  prom -. "scrape" .-> v1
-  prom -. "scrape" .-> v2
-  v1 -- "stdout / stderr" --> files
-  traefik -- "access log" --> files
-  files --> fluentd -- "push" --> loki
-  graf --> prom
-  graf --> loki
-```
+![Архитектура: пользователь → Gateway API (Traefik) → web v1/v2; Prometheus и Grafana; Fluentd → Loki](docs/architecture.svg)
 
 - **Трафик.** Клиент → `NODE_IP:443` (hostPort пода Traefik) → TLS-терминация сертификатом
   `*.<NODE_IP>.sslip.io` → HTTPRoute → Service `web-v1` / `web-v2` → nginx `:8080`.
-  `http://` отвечает 301 на `https://`. Адрес узла Traefik записывает в `Gateway.status.addresses`.
+  `http://` отвечает 301 на `https://` с тем же именем хоста. Адрес узла Traefik записывает
+  в `Gateway.status.addresses`.
 - **Метрики.** Prometheus Operator находит цели через ServiceMonitor/PodMonitor: Traefik, nginx-exporter
   приложения, node-exporter, kubelet/cAdvisor, apiserver, scheduler, controller-manager, CoreDNS,
   kube-state-metrics, cert-manager, Fluentd, Loki.
@@ -225,9 +193,10 @@ Preflight останавливает развёртывание, если CPU м
 Loki 48 ч). Явный `PROFILE=default` на такой машине даёт предупреждение.
 
 **Проверено на 2 vCPU / 4 ГБ** (Ubuntu 24.04, диск 30 ГБ, без swap): preflight сам выбирает `PROFILE=small`,
-развёртывание занимает ~520 с, `make check` — 25/25, повторный запуск — `changed=0`. После развёртывания свободно
-~750 МиБ RAM, requests 1275m CPU / 1.5 GiB памяти, ни одного рестарта, OOMKilled или eviction. Около 0.9 ГБ на такой
-машине занимает сам control plane (kube-apiserver), поэтому меньше 4 ГБ не поддерживается.
+развёртывание занимает 9–10 мин (519–574 с в разных прогонах), `make check` — 25/25, повторный запуск —
+`changed=0`. После развёртывания свободно ~740 МиБ RAM, requests 1275m CPU / 1.5 GiB памяти, ни одного рестарта,
+OOMKilled или eviction. Около 0.9 ГБ на такой машине занимает сам control plane (kube-apiserver), поэтому меньше
+4 ГБ не поддерживается.
 
 Заранее ставить ничего не нужно: `deploy.sh` сам ставит containerd, kubeadm/kubelet/kubectl, Helm (с проверкой sha256)
 и нужные утилиты. Что он делает с хостом:
@@ -267,12 +236,13 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
    | `NODE_IP` | адрес источника маршрута по умолчанию | IP узла, на котором публикуется шлюз (если адресов несколько, preflight предупредит) |
    | `PROFILE` | `default` (`small`, если RAM < 7 GiB) | `small` — меньше requests и хранение для 2 vCPU / 4 ГБ |
    | `POD_CIDR` / `SVC_CIDR` | `10.244.0.0/16` / `10.96.0.0/16` | сети кластера |
-   | `DOCKERHUB_MIRROR` | `https://mirror.gcr.io` | зеркало для docker.io; `""` — тянуть напрямую |
+   | `DOCKERHUB_MIRROR` | `https://mirror.gcr.io` | зеркало для docker.io; без зеркала — `sudo DOCKERHUB_MIRROR= ./deploy.sh` (через `make deploy` пустое значение не передаётся) |
    | `CONTAINERD_SOURCE` | `ubuntu` (или `docker`, если уже стоит `containerd.io`) | откуда брать containerd |
    | `CANARY_WEIGHT` | `20` | доля трафика `/` на v2, % |
    | `ONLY_STAGES` | все | подмножество стадий, например `"40-app 50-monitoring"` |
    | `HOST_SUFFIX` | `<NODE_IP>.sslip.io` | DNS-суффикс хостов приложения и Grafana |
    | `HELM_TIMEOUT` | `10m` | сколько ждать готовности одного Helm-релиза (медленная сеть) |
+   | `GATEWAY_TIMEOUT` | `180` | сколько секунд ждать Programmed у Gateway (медленный старт Traefik) |
    | `FLUENTD_IMAGE`, `FLUENTD_IMAGE_TAG` | из [`versions.env`](versions.env) (ghcr.io) | образ Fluentd из зеркала, если ghcr.io недоступен |
 
 3. Стадии выполняются по порядку. Каждая сначала проверяет состояние, меняет только разницу и печатает
@@ -288,8 +258,11 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
    | `50-monitoring` | Secret Grafana, kube-prometheus-stack, дашборды, алерты, маршрут Grafana | 98 с |
    | `60-logging` | Loki, Fluentd | 83 с |
 
+   Во время ожидания Calico (`20-cluster`) и установки kube-prometheus-stack (`50-monitoring`, `helm --wait`)
+   вывод замирает на 1–3 мин. Это нормально, процесс не завис.
+
 4. В конце `deploy.sh` печатает итог `Done: ok=45 changed=48`, `Elapsed: 459s` (7 мин 39 с на чистой ВМ; большую часть
-   времени занимает загрузка образов, поэтому на другой сети цифра другая, прежние прогоны давали 387–460 с),
+   времени занимает загрузка образов, поэтому на другой сети цифра другая, прежние прогоны давали 387–459 с),
    адреса и следующие команды (пример — в [Быстром старте](#быстрый-старт)). В выводе есть три строки
    `warning ... outside Pod Security "restricted:latest"` для Traefik, node-exporter и Fluentd. Так задумано:
    у этих namespace enforce=privileged, но warn=restricted, поэтому каждое послабление видно.
@@ -475,6 +448,7 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
 
 | Команда | Что делает |
 |---|---|
+| `make help` | список команд (цель по умолчанию) |
 | `make deploy` | `sudo ./deploy.sh`: развернуть или довести до нужного состояния (идемпотентно; make ставит первый `deploy.sh`) |
 | `make check` | сквозная проверка, PASS/FAIL по каждому пункту, ненулевой код выхода при ошибке |
 | `make creds` | адреса, логин и пароль Grafana |
@@ -602,7 +576,8 @@ NODE_IP=$(kubectl get gateway web -n gateway -o jsonpath='{.status.addresses[0].
 APP=app.$NODE_IP.sslip.io
 CURL="curl -s --cacert out/ca.crt --resolve $APP:443:$NODE_IP"   # --resolve: не зависеть от DNS
 
-curl -sI http://$NODE_IP/ | head -3              # 301, Location: https://...
+curl -sI http://$NODE_IP/ | head -3              # 301, Location: https://<NODE_IP>/
+curl -sI --resolve $APP:80:$NODE_IP http://$APP/ | head -3   # 301, Location: https://app.<NODE_IP>.sslip.io/
 $CURL https://$APP/                              # Hello World! (v1) или (v2); TLS проверяется без -k
 $CURL -H 'X-Version: v2' https://$APP/           # Hello World! (v2)
 $CURL "https://$APP/?version=v2"                 # Hello World! (v2)
@@ -618,6 +593,10 @@ seq 100 | xargs -P 50 -I{} $CURL -o /dev/null -w '%{http_code}\n' https://$APP/ 
 $ curl -sI http://192.168.122.10/
 HTTP/1.1 301 Moved Permanently
 Location: https://192.168.122.10/
+
+$ curl -sI http://app.192.168.122.10.sslip.io/
+HTTP/1.1 301 Moved Permanently
+Location: https://app.192.168.122.10.sslip.io/
 
 $ curl --cacert out/ca.crt https://app.192.168.122.10.sslip.io/
 Hello World! (v1)
@@ -635,6 +614,10 @@ X-Version: v2   -> Hello World! (v2)
      49 200
      51 429
 ```
+
+Редирект сохраняет имя хоста. По голому IP маршрутов нет: `http://<IP>/` ведёт на `https://<IP>/`, где шлюз
+отвечает 404 со своим сертификатом по умолчанию. Приложение и Grafana открываются по именам `app.<IP>.sslip.io`
+и `grafana.<IP>.sslip.io`.
 
 Сертификат шлюза выпущен cert-manager от собственного CA (`kube-gateway-stand CA`) для `*.<NODE_IP>.sslip.io`,
 `<NODE_IP>.sslip.io` и самого IP; `openssl s_client -CAfile out/ca.crt` даёт `Verify return code: 0 (ok)`.
@@ -685,8 +668,12 @@ sum by (code) (rate(traefik_service_requests_total{service=~".*-svc-web-web-v[12
 sum(rate(traefik_service_requests_total{service=~".*-svc-web-web-v2-.*"}[5m]))
   / sum(rate(traefik_service_requests_total{service=~".*-svc-web-web-v[12]-.*"}[5m]))
 
-# p95 latency по backend
-histogram_quantile(0.95, sum by (le, service) (rate(traefik_service_request_duration_seconds_bucket{service=~".*-svc-web-web-v[12]-.*"}[5m])))
+# доля v2 только в правиле с весами (/ без закреплений), сравнить с весом в HTTPRoute (20 %)
+sum(increase(traefik_service_requests_total{service=~"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v2-[0-9]+@kubernetesgateway"}[10m]))
+  / sum(increase(traefik_service_requests_total{service=~"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v[12]-[0-9]+@kubernetesgateway"}[10m]))
+
+# p95 latency по версиям (v1 / v2)
+histogram_quantile(0.95, sum by (le, version) (label_replace(rate(traefik_service_request_duration_seconds_bucket{service=~".*-svc-web-web-v[12]-[0-9]+@kubernetesgateway"}[5m]), "version", "$1", "service", ".*-svc-web-web-(v[12])-.*")))
 
 # ответы 429 от rate limit
 sum(rate(traefik_entrypoint_requests_total{entrypoint="websecure", code="429"}[1m]))
@@ -767,8 +754,9 @@ The same queries are on the Grafana dashboard "Web: golden signals" (./scripts/c
 `WebHighErrorRatio`, `WebHighLatencyP95`, `TraefikDown`, `CertificateExpiringSoon`, `CertificateNotReady`,
 `FluentdOutputErrors`, `FluentdBufferNearLimit`, `LokiDiscardingLines`, `LokiNotReceivingLogs`, `WebLogsMissing`
 и recording rule `web:traefik_requests:rate5m`. К ним добавляются стандартные правила kube-prometheus-stack
-(всего 139 алертов в 36 группах). На здоровом кластере горит только `Watchdog`, он горит всегда по замыслу.
-Alertmanager выключен, поэтому уведомления никуда не отправляются (см. [ограничения](#известные-ограничения)).
+(всего 139 алертов в 36 группах). На здоровом кластере горят только `Watchdog` (всегда, по замыслу) и примерно
+через 15 мин после деплоя `PrometheusNotConnectedToAlertmanagers`: Alertmanager выключен намеренно, поэтому
+уведомления никуда не отправляются (см. [ограничения](#известные-ограничения)).
 
 ## Проверка логов
 
@@ -786,9 +774,9 @@ Alertmanager выключен, поэтому уведомления никуд�
 **Куда идут.** kubelet пишет stdout/stderr контейнеров в `/var/log/pods` → Fluentd (DaemonSet, читает
 `/var/log/pods` и `/var/log/containers` через read-only монтирование) разбирает формат CRI, добавляет метаданные Kubernetes,
 разбирает JSON и error-лог → Loki (monolithic, PVC 5 ГБ, хранение 72 ч) → Grafana (datasource Loki).
-Метки Loki: `namespace`, `container`, `stream`, `log_type`. Поля `pod`, `node`, `request_id` остаются в теле строки
-и ищутся через `| json`. Позиции чтения и буфер Fluentd лежат в `/var/lib/fluentd` на узле, поэтому рестарт пода
-не теряет строки.
+Метки Loki: `namespace`, `container`, `stream`, `log_type`; ещё `service_name` Loki 3 добавляет сам. Поля `pod`,
+`node`, `request_id` остаются в теле строки и ищутся через `| json`. Позиции чтения и буфер Fluentd лежат
+в `/var/lib/fluentd` на узле, поэтому рестарт пода не теряет строки.
 
 **Как проверить.** `make demo-logs` отправляет два запроса с уникальным `X-Request-ID` (200 и 404) и через API-сервер
 находит их в Loki: в access-логе шлюза, access-логе приложения и error-логе nginx.
@@ -818,6 +806,11 @@ $ make demo-logs
 ```
 
 Строки Traefik в выводе выше сокращены (`...`), в Loki они полные.
+
+Сразу после старта или перезапуска Traefik в ленте ошибок (дашборд «Logs: pipeline»,
+`{namespace="gateway", log_type="error"}`) бывает несколько строк
+`middleware "web-rate-limit@kubernetescrd" does not exist`. Провайдер Gateway API собрал маршруты
+раньше, чем провайдер CRD прочитал Middleware. Через секунды маршруты полные, rate limit работает (п. 5.1 `make check`).
 
 Вручную, без скрипта:
 
@@ -918,7 +911,11 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   - веса canary, изменённые `make canary`, возвращаются к `CANARY_WEIGHT` (`changed=1`, поды не перезапускаются);
   - релиз Helm, который остался в `pending-install` или `pending-upgrade` (оборвался SSH, Ctrl-C во время `helm --wait`),
     откатывается на последнюю рабочую ревизию или удаляется и ставится заново;
-  - упавшая стадия: повторный запуск продолжает с текущего состояния.
+  - упавшая стадия: повторный запуск продолжает с текущего состояния;
+  - прерванный запуск (Ctrl-C, оборвавшийся SSH) — достаточно снова `sudo ./deploy.sh`. Проверено прерыванием на 88-й,
+    115-й, 200-й и 400-й секунде (apt hold, ожидание Calico, local-path, установка kube-prometheus-stack): повтор каждый
+    раз доходил до конца и давал 25/25. Если прерывание пришлось на `helm --wait`, в выводе будут `Error: context canceled`
+    и `ERROR: helm release … failed`. Это след прерывания, а не сбой.
 
   Исключение — прерванный или упавший `kubeadm init`: preflight находит следы неготового кластера, ничего не меняет
   и предлагает `make destroy YES=1`, после чего нужно запустить деплой заново.
@@ -947,9 +944,11 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   - данные PVC (`/opt/local-path-provisioner`), состояние Fluentd (`/var/lib/fluentd`), `/var/lib/kube-gateway-stand`.
 
   Остаются пакеты (containerd, kubeadm/kubelet/kubectl, Helm), настройки ядра и `out/` в репозитории.
-  На полном стеке destroy занимает ~3 с. Следующий деплой (образы уже в кэше) проходит за 225–249 с,
+  На полном стеке destroy занимает 3–8 с. Следующий деплой (образы уже в кэше) на диске 40 ГБ проходит за 225–249 с,
   после него `make check` даёт 25/25.
-- **С нуля:** `make destroy YES=1 && make deploy`.
+- **С нуля:** `make destroy YES=1 && make deploy`. Если после `make destroy` preflight остановится на проверке
+  20 GiB свободного места на `/var` (диск меньше ~36 ГБ, образы прошлого кластера остались в кэше), освободите кэш
+  образов: `sudo crictl rmi --prune` (следующий деплой скачает их заново).
 
 ## Известные ограничения
 
@@ -962,9 +961,14 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
 - **Несколько сетевых интерфейсов.** `NODE_IP` — адрес источника маршрута по умолчанию. В ВМ с адаптерами NAT и
   host-only это NAT-адрес, до которого браузер на хосте не достанет. Preflight предупреждает об этом до первого
   запуска; нужный адрес задаётся так: `sudo NODE_IP=<адрес> ./deploy.sh`.
-- **Межсетевой экран хоста** (ufw, firewalld) не проверялся. Preflight предупреждает, если он включён.
+- **Межсетевой экран хоста.** С ufw проверено: ufw включён до деплоя (`default deny incoming`, `allow 22/tcp`), деплой
+  и `make check` — 25/25, приложение и Grafana открываются с другой машины в сети. Порты 80/443 публикуются через
+  hostPort: DNAT в PREROUTING, дальше пакет идёт к поду через FORWARD, и его пропускает Calico. Поэтому правила ufw
+  для 80/443 не нужны и на них не действуют, а порт API 6443 снаружи закрыт. firewalld не проверялся, preflight
+  предупреждает, если он включён.
 - **HTTP-прокси** для доступа в интернет не поддерживается: нужен прямой выход к реестрам и репозиториям.
-- **Docker Hub** по умолчанию идёт через зеркало `mirror.gcr.io`. Если зеркало недоступно, задайте `DOCKERHUB_MIRROR=""`.
+- **Docker Hub** по умолчанию идёт через зеркало `mirror.gcr.io`. Если зеркало недоступно, запустите
+  `sudo DOCKERHUB_MIRROR= ./deploy.sh` (через `make deploy` пустое значение не передаётся).
   Образ Fluentd лежит в ghcr.io; если ghcr.io недоступен, укажите зеркало через `FLUENTD_IMAGE` и `FLUENTD_IMAGE_TAG`
   (Dockerfile образа — в [`images/fluentd`](images/fluentd)). Для quay.io и registry.k8s.io зеркала не настраиваются.
 - **DNS sslip.io.** Хосты `*.<NODE_IP>.sslip.io` требуют работающего DNS, а некоторые резолверы режут ответы с частными IP
@@ -980,6 +984,29 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
 - **Loki** не строит полнотекстовый индекс: поиск по `request_id` — построчный фильтр в пределах выбранных меток.
 - **etcd и kube-proxy** не скрейпятся напрямую, их метрики доступны только на `127.0.0.1`.
 - **Часы узла** должны быть синхронизированы (NTP). Preflight предупреждает, если синхронизации нет.
+- **Голый IP.** Маршрутов по IP нет: `http://<IP>/` отвечает 301 на `https://<IP>/`, где шлюз отдаёт 404 со своим
+  сертификатом по умолчанию. Приложение и Grafana работают только по именам `*.<IP>.sslip.io`.
+- **Имена сервисов Traefik в PromQL.** Запросы в дашбордах, алертах и `make demo-metrics` опираются на имена сервисов
+  Traefik v3.7 (legacy naming; при старте Traefik пишет об этом предупреждение). При обновлении Traefik регулярки
+  `service=~".*-svc-web-web-v[12]-…"` нужно перепроверить.
+- **Время строк access-логов** nginx и Traefik в Loki — с точностью до секунды, как в самих логах. Порядок строк
+  внутри одной секунды не гарантирован.
+
+**Безопасность платформы: что упрощено на стенде и что было бы в проде**
+
+- **Secret в etcd не шифруются:** EncryptionConfiguration не настроен. На одном узле ключ лежал бы на том же диске,
+  что и etcd. В проде — KMS-провайдер.
+- **Аудит-лог API-сервера не включён** (нет `--audit-policy-file` и `--audit-log-path`), поэтому PSA `audit=restricted`
+  только помечает запросы аннотацией. В проде — audit policy и сбор журнала в Loki.
+- **Traefik читает Secret во всех namespace** по RBAC своего чарта — так работают провайдеры Gateway API
+  (`certificateRefs`) и CRD. Сужение через `providers.*.namespaces` и `rbac.namespaced` не проверялось.
+- **NetworkPolicy default-deny есть только в `web`.** В `monitoring` и `logging` политики закрывают Prometheus и Loki,
+  у которых нет аутентификации, а Grafana закрыта логином. В `gateway`, `cert-manager` и `default` политик нет.
+  Namespace `default` без меток PSA: в нём запускаются разовые проверочные поды (например, `kubectl run … busybox`).
+- **Образы закреплены тегами, а не digest, и не подписываются** (cosign). Образ Fluentd CI пересобирает под тем же
+  тегом при изменении `images/fluentd` или `versions.env`; рядом публикуются неизменяемый sha-тег, SBOM и provenance.
+- **Fluentd работает от uid 0** без capabilities (drop ALL), с read-only rootfs и без повышения привилегий: так он
+  читает логи контейнеров с правами `root:root 0640`.
 
 ## Лицензия
 

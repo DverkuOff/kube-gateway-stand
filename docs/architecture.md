@@ -122,7 +122,8 @@ flowchart LR
   а `make destroy` удаляет этот каталог вместе со старыми логами, чтобы новый кластер не перечитывал их.
 - Собственные логи Fluentd не собираются (иначе петля).
 - Метки Loki — только с ограниченным набором значений: `namespace`, `container`, `stream`, `log_type`
-  (`access`, `error`, `other`). `pod`, `request_id` и поля запроса остаются в теле строки и ищутся через `| json`.
+  (`access`, `error`, `other`); ещё `service_name` Loki 3 добавляет сам. `pod`, `request_id` и поля запроса
+  остаются в теле строки и ищутся через `| json`.
 - `request_id` связывает строки: nginx берёт его из `X-Request-ID` (через `map`, иначе генерирует сам),
   Traefik пишет заголовок `X-Request-Id` в свой access-лог. `make demo-logs` и `make check` (пункт 8)
   отправляют запрос с уникальным `X-Request-ID` и находят его в Loki через API-сервер
@@ -140,7 +141,8 @@ flowchart LR
 | `kube-system`, `calico-system`, `tigera-operator`, `local-path-storage` | управляются kubeadm / оператором Calico / манифестом local-path | | | — |
 
 warn/audit = restricted на привилегированных namespace оставляют видимым любое послабление: API-сервер
-предупреждает при создании пода и пишет событие в audit.
+предупреждает при создании пода (warn) и помечает запрос аннотацией для аудита (audit). Сам аудит-лог API-сервера
+в стенде не включён (см. [ограничения в README](../README.md#известные-ограничения)).
 
 ## Порядок развёртывания
 
@@ -194,8 +196,8 @@ warn/audit = restricted на привилегированных namespace ост
 | цепочки `KUBE-*`, `cali-*`, `CNI-HOSTPORT-*`, `CNI-DN-*`, `CNI-SN-*` в iptables/ip6tables | иначе DNAT hostPort 80/443 остаётся направленным на IP старого пода Traefik |
 | `/opt/local-path-provisioner`, `/var/lib/fluentd`, `/var/lib/kube-gateway-stand` | данные PVC, позиции Fluentd, отпечатки Helm и кэш CRD |
 
-Пакеты, настройки ядра (sysctl, модули) и `out/` в репозитории остаются. На полном стеке destroy занимает ~3 с.
-Следующий деплой (образы уже в кэше) проходит за 225–249 с, сразу после него `make check` даёт 25/25.
+Пакеты, настройки ядра (sysctl, модули) и `out/` в репозитории остаются. На полном стеке destroy занимает 3–8 с.
+Следующий деплой (образы уже в кэше) на диске 40 ГБ проходит за 225–249 с, сразу после него `make check` даёт 25/25.
 
 ## Безопасность
 
@@ -236,7 +238,7 @@ warn/audit = restricted на привилегированных namespace ост
 ```text
 .
 ├── deploy.sh                  # точка входа: sudo ./deploy.sh (стадии по порядку)
-├── Makefile                   # make deploy | check | creds | demo-logs | demo-metrics | canary | destroy | lint
+├── Makefile                   # make help | deploy | check | creds | demo-logs | demo-metrics | canary | destroy | lint
 ├── versions.env               # все версии компонентов и контрольные суммы
 ├── scripts/
 │   ├── lib.sh                 # общие функции: ok/changed, kapply, helm_release, wait_for, ...
@@ -255,7 +257,7 @@ warn/audit = restricted на привилегированных namespace ост
 │   └── observability/         # маршрут Grafana, дашборды, PrometheusRule, NetworkPolicy Prometheus/Loki
 ├── dashboards/                # JSON-дашборды Grafana
 ├── images/fluentd/            # Dockerfile образа Fluentd с плагином Loki
-├── docs/architecture.md       # этот документ
+├── docs/                      # architecture.md (этот документ), architecture.svg (схема из README)
 ├── .github/workflows/         # lint, image, e2e
 └── out/                       # создаётся при деплое: ca.crt (в git не попадает)
 ```
