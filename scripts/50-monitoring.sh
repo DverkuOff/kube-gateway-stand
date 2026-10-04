@@ -20,7 +20,7 @@ ok "namespace $MON_NS and CRDs present"
 # --- Grafana admin credentials -----------------------------------------------------------
 # Generated once, never printed; created from stdin (not --from-literal, not apply) so the
 # password is neither visible in the process list nor stored in a last-applied annotation.
-# Delete the Secret and re-run the stage to rotate it (then restart Grafana).
+# Delete the Secret and re-run the stage to rotate it: a running Grafana is restarted to pick it up.
 step "monitoring: Grafana admin Secret"
 if kc -n "$MON_NS" get secret grafana-admin >/dev/null 2>&1; then
   ok "secret $MON_NS/grafana-admin exists"
@@ -41,6 +41,14 @@ stringData:
 EOF
   unset grafana_password
   changed "secret $MON_NS/grafana-admin created (show it with ./scripts/creds.sh)"
+  # Grafana stores the admin password in its database (emptyDir) on first start and would keep the
+  # old one, so `make creds` would show a password that does not work: restart it with the new Secret.
+  if kc -n "$MON_NS" get deployment kps-grafana >/dev/null 2>&1; then
+    kc -n "$MON_NS" rollout restart deployment/kps-grafana >/dev/null
+    kc -n "$MON_NS" rollout status deployment/kps-grafana --timeout=300s >/dev/null ||
+      die "Grafana did not restart with the new admin Secret: kubectl -n $MON_NS get pods -l app.kubernetes.io/name=grafana"
+    changed "Grafana restarted to use the new admin password"
+  fi
 fi
 
 # --- Grafana sidecar RBAC ----------------------------------------------------------------
