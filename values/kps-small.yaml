@@ -8,7 +8,7 @@ prometheus:
     resources:
       requests:
         cpu: 100m
-        memory: 512Mi
+        memory: 384Mi            # measured on 2 vCPU / 4 GB: ~280 MiB working set after deploy
       limits:
         memory: 1Gi
     storageSpec:
@@ -25,4 +25,4 @@ grafana:
       cpu: 20m
       memory: 128Mi
     limits:
-      memory: 384Mi
+      memory: 512Mi              # peaks at ~320 MiB while it provisions dashboards on start

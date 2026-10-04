@@ -5,7 +5,8 @@
 # Environment overrides (all optional):
 #   NODE_IP            node address (default: source address of the default route)
 #   POD_CIDR/SVC_CIDR  cluster networks (default 10.244.0.0/16 / 10.96.0.0/16)
-#   PROFILE            default | small  (small: lower requests/retention for 2 vCPU / 4 GB)
+#   PROFILE            default | small  (small: lower requests/retention for 2 vCPU / 4 GB;
+#                      not set: small when RAM < 7 GiB, otherwise default)
 #   DOCKERHUB_MIRROR   registry mirror for docker.io (default https://mirror.gcr.io, "" = none)
 #   CONTAINERD_SOURCE  ubuntu | docker (use docker where Docker's containerd.io is already installed)
 #   CANARY_WEIGHT      share of traffic for v2 in percent (default 20)

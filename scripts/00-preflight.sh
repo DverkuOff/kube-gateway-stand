@@ -164,10 +164,12 @@ ok "CPUs: $cpus"
 mem_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo)"
 mem_gib="$(awk -v k="$mem_kb" 'BEGIN { printf "%.1f", k / 1048576 }')"
 ((mem_kb >= 3670016)) || die "at least 3.5 GiB of RAM is required (found ${mem_gib} GiB)"
-if ((mem_kb < 7864320)) && [[ "$PROFILE" != small ]]; then
-  warn "RAM is ${mem_gib} GiB (< 7.5 GiB): consider PROFILE=small (sudo PROFILE=small ./deploy.sh)"
+if [[ "$PROFILE_SOURCE" == auto && "$PROFILE" == small ]]; then
+  ok "RAM: ${mem_gib} GiB (< 7 GiB): PROFILE=small selected automatically (lower requests/limits and retention; override: sudo PROFILE=default ./deploy.sh)"
+elif ((mem_kb < 7340032)) && [[ "$PROFILE" != small ]]; then
+  warn "RAM is ${mem_gib} GiB (< 7 GiB), but PROFILE=$PROFILE was given: requests and retention are sized for 8 GB, little memory stays free; PROFILE=small is meant for 2 vCPU / 4 GB"
 else
-  ok "RAM: ${mem_gib} GiB (profile: $PROFILE)"
+  ok "RAM: ${mem_gib} GiB (profile: $PROFILE, ${PROFILE_SOURCE:-explicit})"
 fi
 var_free_kb="$(df -Pk /var | awk 'NR == 2 { print $4 }')"
 var_free_gib=$((var_free_kb / 1048576))

@@ -225,11 +225,21 @@ load_config() {
   HOST_SUFFIX="${HOST_SUFFIX:-${NODE_IP}.sslip.io}"
   APP_HOST="${APP_HOST:-app.${HOST_SUFFIX}}"
   GRAFANA_HOST="${GRAFANA_HOST:-grafana.${HOST_SUFFIX}}"
-  PROFILE="${PROFILE:-default}"                       # default | small
+  # PROFILE: default | small. Not given: chosen from RAM (MemTotal < 7 GiB -> small); 00-preflight says which.
+  if [[ -n "${PROFILE:-}" ]]; then
+    PROFILE_SOURCE=explicit
+  else
+    PROFILE_SOURCE=auto
+    PROFILE=default
+    local mem_kb
+    mem_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null || true)"
+    [[ "$mem_kb" =~ ^[0-9]+$ ]] && ((mem_kb < 7340032)) && PROFILE=small
+  fi
+  [[ "$PROFILE" == default || "$PROFILE" == small ]] || die "PROFILE must be 'default' or 'small' (got '$PROFILE')"
   DOCKERHUB_MIRROR="${DOCKERHUB_MIRROR-https://mirror.gcr.io}"  # set to "" to pull from docker.io directly
   CONTAINERD_SOURCE="${CONTAINERD_SOURCE:-ubuntu}"   # ubuntu | docker
   KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
-  export ARCH NODE_IP POD_CIDR SVC_CIDR HOST_SUFFIX APP_HOST GRAFANA_HOST PROFILE DOCKERHUB_MIRROR CONTAINERD_SOURCE KUBECONFIG
+  export ARCH NODE_IP POD_CIDR SVC_CIDR HOST_SUFFIX APP_HOST GRAFANA_HOST PROFILE PROFILE_SOURCE DOCKERHUB_MIRROR CONTAINERD_SOURCE KUBECONFIG
 }
 
 # Lets a stage script run on its own (sudo ./scripts/30-platform.sh) as well as from deploy.sh.

@@ -4,4 +4,4 @@ resources:
     cpu: 20m
     memory: 128Mi
   limits:
-    memory: 256Mi
+    memory: 320Mi    # measured: ~150 MiB working set; headroom for bursts of container logs
