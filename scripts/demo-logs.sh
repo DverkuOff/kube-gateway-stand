@@ -29,7 +29,9 @@ kubectl version --request-timeout=10s >/dev/null 2>&1 || die "cannot reach the c
 # Gateway address and app hostname: environment, else what the cluster reports.
 NODE_IP="${NODE_IP:-$(kubectl -n gateway get gateway web -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || true)}"
 [[ -n "$NODE_IP" ]] || die "cannot find the gateway address (kubectl -n gateway get gateway web); set NODE_IP"
+APP_HOST="${APP_HOST:-$(kubectl -n web get httproute web -o jsonpath='{.spec.hostnames[0]}' 2>/dev/null || true)}"
 APP_HOST="${APP_HOST:-app.${NODE_IP}.sslip.io}"
+GRAFANA_HOST="${GRAFANA_HOST:-$(kubectl -n monitoring get httproute grafana -o jsonpath='{.spec.hostnames[0]}' 2>/dev/null || true)}"
 GRAFANA_HOST="${GRAFANA_HOST:-grafana.${NODE_IP}.sslip.io}"
 
 loki_get() {  # loki_get PATH_AND_QUERY -> JSON from Loki via the API server's service proxy
