@@ -241,7 +241,7 @@
       "id": 5,
       "type": "stat",
       "title": "Canary: v2 share of / (10 min)",
-      "description": "Share of web-v2 among requests of the weighted rule 'canary' of HTTPRoute web (path / without X-Version, ?version or /preview) over the last 10 minutes. Compare with the v2 weight in the HTTPRoute (CANARY_WEIGHT, 20 by default). Pinned requests are not counted here: see 'Requests by version'.",
+      "description": "Share of web-v2 among requests of the weighted rule 'canary' of HTTPRoute web (path / without X-Version, ?version or /preview) over the last 10 minutes. Counters are compared with their values 10 minutes ago; a series that appeared later is counted from zero, so the first requests on a fresh cluster are included (increase() would miss them). Compare with the v2 weight in the HTTPRoute (CANARY_WEIGHT, 20 by default). Pinned requests are not counted here: see 'Requests by version'.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -258,7 +258,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v2-[0-9]+@kubernetesgateway\"}[10m])) / sum(increase(traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v[12]-[0-9]+@kubernetesgateway\"}[10m]))",
+          "expr": "sum(clamp_min(traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v2-[0-9]+@kubernetesgateway\"} - traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v2-[0-9]+@kubernetesgateway\"} offset 10m, 0) or traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v2-[0-9]+@kubernetesgateway\"}) / sum(clamp_min(traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v[12]-[0-9]+@kubernetesgateway\"} - traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v[12]-[0-9]+@kubernetesgateway\"} offset 10m, 0) or traefik_service_requests_total{service=~\"httproute-web-web-gw-gateway-web-ep-websecure-3-[0-9a-f]+-svc-web-web-v[12]-[0-9]+@kubernetesgateway\"})",
           "legendFormat": "",
           "refId": "A",
           "range": true
