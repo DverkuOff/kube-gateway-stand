@@ -877,10 +877,10 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   `changed=0` → `make check`. На раннерах уже стоит `containerd.io` от Docker, preflight сам выбирает
   `CONTAINERD_SOURCE=docker`, так что заодно проверяется хост с Docker. Статус — на бейдже вверху.
 
-  | Прогон e2e (коммит `7f6281b`) | Раннер | Первый деплой | Повторный деплой | `make check` после каждого |
+  | Прогон e2e (коммит `295d3cb`) | Раннер | Первый деплой | Повторный деплой | `make check` после каждого |
   |---|---|---|---|---|
-  | [37203765306](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37203765306) | `ubuntu-24.04` (amd64) | 309 с, `ok=47 changed=46` | 18 с, `ok=90 changed=0` | 25/25 и 25/25 |
-  | [37203765306](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37203765306) | `ubuntu-24.04-arm` (arm64) | 286 с, `ok=47 changed=46` | 16 с, `ok=90 changed=0` | 25/25 и 25/25 |
+  | [37204932290](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37204932290) | `ubuntu-24.04` (amd64) | 285 с, `ok=47 changed=46` | 18 с, `ok=90 changed=0` | 25/25 и 25/25 |
+  | [37204932290](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37204932290) | `ubuntu-24.04-arm` (arm64) | 278 с, `ok=47 changed=46` | 15 с, `ok=90 changed=0` | 25/25 и 25/25 |
 
 **Надёжность и безопасность**
 - Pod Security Admission: `web` и `cert-manager` — restricted. `gateway` (hostPort), `monitoring` (node-exporter)
