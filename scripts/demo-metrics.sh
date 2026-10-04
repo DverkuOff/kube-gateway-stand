@@ -56,10 +56,15 @@ if [[ -z "${SKIP_TRAFFIC:-}" ]]; then
       --resolve "${app_host}:443:${node_ip}" "$@" "https://${app_host}${path}" || echo 000
   }
 
+  # Gateway counter of the app backends before the demo traffic: the wait below needs the
+  # samples of this run, not the ones of earlier traffic.
+  total_q="sum(traefik_service_requests_total{service=~\"${SVC}\"})"
+  total_before="$(promql "$total_q" | jq -r '.[0].value[1] // "0"')"
+
   paced=$((REQUESTS * 3 / 5))
   burst=$((REQUESTS - paced))
   title "Sending ${paced} paced requests to https://${app_host} (via ${node_ip}): /, X-Version: v2, ?version=v2, /preview, a missing page"
-  codes="$(
+  paced_codes="$(
     for ((i = 1; i <= paced; i++)); do
       case $((i % 10)) in
         1) req / -H 'X-Version: v2' ;;
@@ -71,24 +76,26 @@ if [[ -z "${SKIP_TRAFFIC:-}" ]]; then
       sleep 0.06   # stay under the rate limit (20 rps)
     done
   )"
-  printf '%s\n' "$codes" | sort | uniq -c | awk '{printf "    HTTP %s: %s\n", $2, $1}'
+  printf '%s\n' "$paced_codes" | sort | uniq -c | awk '{printf "    HTTP %s: %s\n", $2, $1}'
 
   title "Sending a burst of ${burst} parallel requests to trigger the rate limit (429)"
   export -f req
   export CA app_host node_ip
-  codes="$(seq "$burst" | xargs -P 20 -I{} bash -c 'req /')"
-  printf '%s\n' "$codes" | sort | uniq -c | awk '{printf "    HTTP %s: %s\n", $2, $1}'
+  burst_codes="$(seq "$burst" | xargs -P 20 -I{} bash -c 'req /')"
+  printf '%s\n' "$burst_codes" | sort | uniq -c | awk '{printf "    HTTP %s: %s\n", $2, $1}'
 
-  title "Waiting for Prometheus to scrape the new samples"
+  # Requests that reached a backend (429 is answered by the gateway itself, 000 is a client error).
+  reached="$(printf '%s\n' "$paced_codes" "$burst_codes" | grep -cvE '^(429|000)$' || true)"
+  total_want="$(awk -v b="$total_before" -v r="$reached" 'BEGIN { print b + r }')"
+  title "Waiting for Prometheus to scrape the new samples (gateway counter ${total_before} -> ${total_want})"
   deadline=$((SECONDS + ${SCRAPE_WAIT:-150}))
-  until [[ "$(promql "sum(increase(traefik_service_requests_total{service=~\"${SVC}\"}[2m])) > 0" | jq 'length')" -gt 0 ]]; do
+  until awk -v now="$(promql "$total_q" | jq -r '.[0].value[1] // "0"')" -v want="$total_want" 'BEGIN { exit !(now >= want) }'; do
     if ((SECONDS >= deadline)); then
-      printf '  no samples yet; Prometheus scrapes every 30-60 s, re-run with SKIP_TRAFFIC=1 in a minute\n'
+      printf '  not all samples yet; Prometheus scrapes every 30-60 s, re-run with SKIP_TRAFFIC=1 in a minute\n'
       break
     fi
-    sleep 10
+    sleep 5
   done
-  sleep 5
 fi
 
 # ---------- queries ----------

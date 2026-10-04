@@ -7,7 +7,7 @@
 # Prints numbered PASS/FAIL/SKIP lines and "N passed, M failed"; exits non-zero when anything fails.
 #
 # Optional environment: PROM_SVC (default kps-prometheus:http-web), LOKI_SVC (default loki:3100),
-# SPLIT_REQUESTS (200), BURST_REQUESTS (100), LOG_TIMEOUT (30).
+# SPLIT_REQUESTS (200), BURST_REQUESTS (100), LOG_TIMEOUT (30), METRICS_WAIT (120).
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,6 +23,8 @@ LOKI_API="/api/v1/namespaces/logging/services/${LOKI_SVC}/proxy/loki/api/v1"
 SPLIT_REQUESTS="${SPLIT_REQUESTS:-200}"
 BURST_REQUESTS="${BURST_REQUESTS:-100}"
 LOG_TIMEOUT="${LOG_TIMEOUT:-30}"
+# Right after a deploy Prometheus has not scraped every target yet (first scrape within 30 s).
+METRICS_WAIT="${METRICS_WAIT:-120}"
 SPLIT_TOLERANCE=8 # percentage points
 
 TMP="$(mktemp -d)"
@@ -322,45 +324,71 @@ c_404() {
 # =====================================================================================
 # 7. Metrics (Prometheus through the API server proxy)
 # =====================================================================================
-UP_JSON=""
+# Key components: name|label|regex. A component counts as present when it has a target and all
+# its targets are up.
+KEY_JOBS=(
+  'traefik|job|traefik' 'node-exporter|job|node-exporter' 'kubelet|job|^kubelet$'
+  'apiserver|job|^apiserver$' 'kube-state-metrics|job|kube-state-metrics' 'coredns|job|coredns'
+  'kube-scheduler|job|kube-scheduler' 'kube-controller-manager|job|kube-controller-manager'
+  'web (app exporter)|namespace|^web$' 'fluentd|job|fluentd' 'loki|job|loki' 'cert-manager|job|cert-manager'
+)
+UP_JSON="" JOBS_SUMMARY="" JOBS_PROBLEMS="" UP_WAITED=0
+
+# jobs_eval — fills JOBS_SUMMARY and JOBS_PROBLEMS from UP_JSON; returns 0 when every key job is up.
+jobs_eval() {
+  local spec name field re found
+  JOBS_SUMMARY="" JOBS_PROBLEMS=""
+  for spec in "${KEY_JOBS[@]}"; do
+    IFS='|' read -r name field re <<<"$spec"
+    found="$(jq -r --arg f "$field" --arg re "$re" \
+      '[.data.result[] | select((.metric[$f] // "") | test($re))] | "\([.[] | select(.value[1]=="1")] | length)/\(length)"' <<<"$UP_JSON")"
+    JOBS_SUMMARY+="$name $found, "
+    if [[ "$found" == 0/0 ]]; then
+      JOBS_PROBLEMS+="$name: no target"$'\n'
+    elif [[ "${found%/*}" != "${found#*/}" ]]; then
+      JOBS_PROBLEMS+="$name: only $found up"$'\n'
+    fi
+  done
+  JOBS_SUMMARY="${JOBS_SUMMARY%, }"
+  [[ -z "$JOBS_PROBLEMS" ]]
+}
+
+# all_up — every target that has been scraped is up.
+all_up() {
+  jq -e '(.data.result | length) > 0 and ([.data.result[] | select(.value[1] != "1")] | length) == 0' <<<"$UP_JSON" >/dev/null
+}
+
 c_targets() {
-  local total up down
-  UP_JSON="$(prom 'up' 2>"$TMP/err")" || {
-    MSG="Prometheus API not reachable via services/${PROM_SVC} in ns monitoring: $(head -c 200 "$TMP/err")"
-    UP_JSON=""
-    return 1
-  }
+  local total up down start=$SECONDS
+  # Poll until every target is up and every key job has been scraped (or METRICS_WAIT passes).
+  while :; do
+    UP_JSON="$(prom 'up' 2>"$TMP/err")" || {
+      MSG="Prometheus API not reachable via services/${PROM_SVC} in ns monitoring: $(head -c 200 "$TMP/err")"
+      UP_JSON=""
+      return 1
+    }
+    if all_up && jobs_eval; then break; fi
+    ((SECONDS - start >= METRICS_WAIT)) && break
+    sleep 5
+  done
+  UP_WAITED=$((SECONDS - start))
   total="$(jq '.data.result | length' <<<"$UP_JSON")"
   up="$(jq '[.data.result[] | select(.value[1]=="1")] | length' <<<"$UP_JSON")"
   down="$(jq -r '.data.result[] | select(.value[1]!="1") | "down: \(.metric.job) \(.metric.instance)"' <<<"$UP_JSON")"
-  MSG="targets up: $up of $total"${down:+$'\n'"$down"}
+  MSG="targets up: $up of $total"
+  ((UP_WAITED >= 5)) && MSG+=" (waited ${UP_WAITED}s for the first scrapes)"
+  MSG+=${down:+$'\n'"$down"}
   ((total > 0 && up == total))
 }
 
 c_jobs() {
-  local spec name field re found problems="" summary=""
   [[ -n "$UP_JSON" ]] || { MSG="no data from Prometheus (see 7.1)"; return 1; }
-  # name|label|regex — a component counts as present when it has a target and all its targets are up.
-  for spec in \
-    'traefik|job|traefik' 'node-exporter|job|node-exporter' 'kubelet|job|^kubelet$' \
-    'apiserver|job|^apiserver$' 'kube-state-metrics|job|kube-state-metrics' 'coredns|job|coredns' \
-    'kube-scheduler|job|kube-scheduler' 'kube-controller-manager|job|kube-controller-manager' \
-    'web (app exporter)|namespace|^web$' 'fluentd|job|fluentd' 'loki|job|loki' 'cert-manager|job|cert-manager'; do
-    IFS='|' read -r name field re <<<"$spec"
-    found="$(jq -r --arg f "$field" --arg re "$re" \
-      '[.data.result[] | select((.metric[$f] // "") | test($re))] | "\([.[] | select(.value[1]=="1")] | length)/\(length)"' <<<"$UP_JSON")"
-    summary+="$name $found, "
-    if [[ "$found" == 0/0 ]]; then
-      problems+="$name: no target"$'\n'
-    elif [[ "${found%/*}" != "${found#*/}" ]]; then
-      problems+="$name: only $found up"$'\n'
-    fi
-  done
-  MSG="${summary%, }"
-  if [[ -n "$problems" ]]; then
-    MSG+=$'\n'"${problems%$'\n'}"
-    return 1
+  if jobs_eval; then
+    MSG="$JOBS_SUMMARY"
+    return 0
   fi
+  MSG="$JOBS_SUMMARY"$'\n'"${JOBS_PROBLEMS%$'\n'}"
+  return 1
 }
 
 c_traefik_counter() {

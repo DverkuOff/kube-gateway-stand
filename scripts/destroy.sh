@@ -64,6 +64,14 @@ else
   ok "no kubeadm state"
 fi
 systemctl stop kubelet 2>/dev/null || true
+# Logs of the removed containers: the kubelet was stopped and never cleaned them up. Static pods
+# get the same UID in the next cluster, so the old files would also continue their restart counts.
+for d in /var/log/pods /var/log/containers; do
+  if [[ -d "$d" && -n "$(ls -A "$d" 2>/dev/null)" ]]; then
+    find "$d" -mindepth 1 -delete
+    changed "removed container logs of the old cluster in $d"
+  fi
+done
 
 step "destroy: CNI and Calico state"
 # calico-node mounts a cgroup2 hierarchy under /run/calico.
@@ -98,19 +106,23 @@ if have nft; then
   done < <(nft list tables 2>/dev/null | awk '$1 == "table" && $3 ~ /^(calico|kube-proxy)/ { print $2, $3 }')
 fi
 
-step "destroy: iptables rules of kube-proxy, kubelet and Calico"
-# Only chains named KUBE-* and cali-* and the rules that jump to them are removed;
-# every other rule (Docker, ufw, libvirt...) is restored unchanged.
+step "destroy: iptables rules of kube-proxy, kubelet, Calico and hostPort"
+# Only chains named KUBE-*, cali-* and the hostPort chains of the CNI portmap plugin
+# (CNI-HOSTPORT-*, CNI-DN-*, CNI-SN-*) and the rules that jump to them are removed;
+# every other rule (Docker, ufw, libvirt...) is restored unchanged. The pod sandboxes were
+# removed without the portmap plugin, so its DNAT rules for the gateway's hostPort 80/443 would
+# otherwise survive and catch the traffic of the next cluster.
+KGS_CHAINS='(KUBE-|cali-|CNI-HOSTPORT-|CNI-DN-|CNI-SN-)'
 clean_iptables() {
   local save=$1 restore=$2 table dump filtered
   have "$save" || return 0
   for table in filter nat mangle raw; do
     dump="$("$save" -t "$table" 2>/dev/null)" || continue
-    grep -Eq '(^:|-A |-[jg] )(KUBE-|cali-)' <<<"$dump" || continue
-    filtered="$(grep -Ev '^:(KUBE-|cali-)|^-A (KUBE-|cali-)|-[jg] (KUBE-|cali-)' <<<"$dump")"
+    grep -Eq "(^:|-A |-[jg] )$KGS_CHAINS" <<<"$dump" || continue
+    filtered="$(grep -Ev "^:$KGS_CHAINS|^-A $KGS_CHAINS|-[jg] $KGS_CHAINS" <<<"$dump")"
     printf '%s\n' "$filtered" | "$restore" -T "$table" ||
       die "$restore failed for table $table; inspect with: $save -t $table"
-    changed "$save: removed KUBE-/cali- chains from table $table"
+    changed "$save: removed KUBE-/cali-/CNI hostPort chains from table $table"
   done
 }
 clean_iptables iptables-save iptables-restore
