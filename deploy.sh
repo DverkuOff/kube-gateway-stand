@@ -11,13 +11,19 @@
 #   CONTAINERD_SOURCE  ubuntu | docker (use docker where Docker's containerd.io is already installed)
 #   CANARY_WEIGHT      share of traffic for v2 in percent (default 20)
 #   ONLY_STAGES        space-separated subset of stages to run, e.g. "30-platform 40-app"
+#   HOST_SUFFIX        DNS suffix of the app and Grafana hosts (default <NODE_IP>.sslip.io)
+#   HELM_TIMEOUT       how long one Helm release may take to become ready (default 10m)
+#   GATEWAY_TIMEOUT    seconds to wait for the Gateway to be Programmed (default 180)
+#   FLUENTD_IMAGE, FLUENTD_IMAGE_TAG  Fluentd image from a mirror (default: ghcr.io, see versions.env)
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export REPO_ROOT
 
 if [[ $EUID -ne 0 ]]; then
-  exec sudo --preserve-env=NODE_IP,POD_CIDR,SVC_CIDR,PROFILE,DOCKERHUB_MIRROR,CONTAINERD_SOURCE,ONLY_STAGES,HOST_SUFFIX,CANARY_WEIGHT,GATEWAY_TIMEOUT "$0" "$@"
+  # bash + absolute path: also works when started as "bash deploy.sh" (no execute bit, no ./ in $0)
+  exec sudo --preserve-env=NODE_IP,POD_CIDR,SVC_CIDR,PROFILE,DOCKERHUB_MIRROR,CONTAINERD_SOURCE,ONLY_STAGES,HOST_SUFFIX,CANARY_WEIGHT,GATEWAY_TIMEOUT,HELM_TIMEOUT,FLUENTD_IMAGE,FLUENTD_IMAGE_TAG \
+    bash "$REPO_ROOT/deploy.sh" "$@"
 fi
 
 # shellcheck source=scripts/lib.sh

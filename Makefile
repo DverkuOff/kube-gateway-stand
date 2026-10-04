@@ -10,7 +10,8 @@ help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
 # Settings passed through sudo, e.g. make deploy PROFILE=small CANARY_WEIGHT=50
-DEPLOY_VARS := NODE_IP POD_CIDR SVC_CIDR PROFILE DOCKERHUB_MIRROR CONTAINERD_SOURCE ONLY_STAGES CANARY_WEIGHT
+DEPLOY_VARS := NODE_IP POD_CIDR SVC_CIDR PROFILE DOCKERHUB_MIRROR CONTAINERD_SOURCE ONLY_STAGES CANARY_WEIGHT \
+               HOST_SUFFIX HELM_TIMEOUT GATEWAY_TIMEOUT FLUENTD_IMAGE FLUENTD_IMAGE_TAG
 DEPLOY_ENV := $(foreach v,$(DEPLOY_VARS),$(if $(value $(v)),$(v)='$($(v))'))
 
 deploy: ## Deploy everything on this host (idempotent, safe to re-run)

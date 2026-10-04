@@ -265,10 +265,14 @@ detect_node_ip() {
 }
 
 load_config() {
+  # The Fluentd image may come from a mirror (FLUENTD_IMAGE=<registry>/<path>); versions.env would overwrite it.
+  local fluentd_image="${FLUENTD_IMAGE:-}" fluentd_tag="${FLUENTD_IMAGE_TAG:-}"
   set -a
   # shellcheck source=/dev/null
   source "$REPO_ROOT/versions.env"
   set +a
+  FLUENTD_IMAGE="${fluentd_image:-$FLUENTD_IMAGE}"
+  FLUENTD_IMAGE_TAG="${fluentd_tag:-$FLUENTD_IMAGE_TAG}"
   ARCH="$(dpkg --print-architecture 2>/dev/null || uname -m)"
   NODE_IP="${NODE_IP:-$(detect_node_ip)}"
   POD_CIDR="${POD_CIDR:-10.244.0.0/16}"
@@ -289,7 +293,8 @@ load_config() {
   [[ "$PROFILE" == default || "$PROFILE" == small ]] || die "PROFILE must be 'default' or 'small' (got '$PROFILE')"
   DOCKERHUB_MIRROR="${DOCKERHUB_MIRROR-https://mirror.gcr.io}"  # set to "" to pull from docker.io directly
   CONTAINERD_SOURCE="${CONTAINERD_SOURCE:-ubuntu}"   # ubuntu | docker
-  KUBECONFIG="${KUBECONFIG:-/etc/kubernetes/admin.conf}"
+  # Always the cluster of this host: a KUBECONFIG left in a root shell must not send the deployment elsewhere.
+  KUBECONFIG=/etc/kubernetes/admin.conf
   export ARCH NODE_IP POD_CIDR SVC_CIDR HOST_SUFFIX APP_HOST GRAFANA_HOST PROFILE PROFILE_SOURCE DOCKERHUB_MIRROR CONTAINERD_SOURCE KUBECONFIG
 }
 
