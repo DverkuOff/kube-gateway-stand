@@ -142,11 +142,13 @@ ok "kernel parameters verified: ${sysctls[*]}"
 # ---------- NetworkManager (Ubuntu Desktop) ----------
 # On Ubuntu Desktop NetworkManager manages every interface, including the ones Calico creates, and
 # may take them over or touch their routes. Calico's documentation asks to leave them unmanaged.
-# Ubuntu Server (systemd-networkd) skips this.
+# "+=" appends to the list: a plain "=" would replace Ubuntu Server's "unmanaged-devices=*,..." and let
+# NetworkManager (when installed there) take over the server's own interfaces.
+# Hosts without an active NetworkManager (Ubuntu Server with systemd-networkd) skip this step.
 if systemctl is-active --quiet NetworkManager 2>/dev/null; then
   step "node: NetworkManager"
   write_file /etc/NetworkManager/conf.d/kube-gateway-stand-calico.conf 0644 < <(printf '%s\n' "$MARKER" '[keyfile]' \
-    'unmanaged-devices=interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico;interface-name:vxlan-v6.calico')
+    'unmanaged-devices+=interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico;interface-name:vxlan-v6.calico')
   if ((WRITE_CHANGED)); then
     systemctl reload NetworkManager || warn "cannot reload NetworkManager; the Calico interfaces become unmanaged after its restart"
     changed "NetworkManager: Calico interfaces unmanaged"
