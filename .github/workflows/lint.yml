@@ -58,7 +58,7 @@ jobs:
           fetch "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
             "$KUBECONFORM_SHA256" kubeconform.tar.gz
           tar -xzf kubeconform.tar.gz -C "$bin" kubeconform
-          pipx install --force "yamllint==${YAMLLINT_VERSION}"
+          python3 -m venv "$RUNNER_TEMP/venv" && "$RUNNER_TEMP/venv/bin/pip" install --quiet "yamllint==${YAMLLINT_VERSION}" && ln -sf "$RUNNER_TEMP/venv/bin/yamllint" "$bin/yamllint"
           echo "$bin" >> "$GITHUB_PATH"
 
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
