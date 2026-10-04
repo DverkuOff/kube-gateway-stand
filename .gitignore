@@ -1,0 +1,10 @@
+# generated at deploy time (CA certificate, credentials hints)
+out/
+# local helm dependencies and packages
+charts/*/charts/
+*.tgz
+# editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
