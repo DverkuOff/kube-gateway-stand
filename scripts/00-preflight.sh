@@ -98,10 +98,23 @@ if have cloud-init && ! cloud-init status 2>/dev/null | grep -q 'status: done'; 
   timeout 300 cloud-init status --wait >/dev/null 2>&1 || warn "cloud-init did not report 'done' within 300 s; continuing (apt may be busy)"
 fi
 
-if [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" == yes ]]; then
+ntp_synced() { [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null || true)" == yes ]]; }
+ntp_enabled() { [[ "$(timedatectl show -p NTP --value 2>/dev/null || true)" == yes ]]; }
+uptime_s="$(awk '{ print int($1) }' /proc/uptime 2>/dev/null || echo 0)"
+# Right after boot the first NTP sync may still be pending: wait for it instead of a false warning.
+if ! ntp_synced && ntp_enabled && ((uptime_s < 600)); then
+  info "waiting up to 60 s for the first NTP synchronization (the host booted less than 10 min ago)"
+  for ((ntp_wait = 0; ntp_wait < 20; ntp_wait++)); do
+    ntp_synced && break
+    sleep 3
+  done
+fi
+if ntp_synced; then
   ok "system clock synchronized"
+elif ntp_enabled; then
+  warn "system clock is not NTP-synchronized yet (NTP is enabled; check: timedatectl timesync-status); certificates and etcd need a correct clock"
 else
-  warn "system clock is not NTP-synchronized; certificates and etcd need a correct clock (timedatectl set-ntp true)"
+  warn "system clock is not NTP-synchronized; certificates and etcd need a correct clock (enable NTP: sudo timedatectl set-ntp true)"
 fi
 
 # ---------- 2. existing cluster ----------
