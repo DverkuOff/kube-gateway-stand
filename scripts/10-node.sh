@@ -20,11 +20,27 @@ export NEEDRESTART_SUSPEND=1
 pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -Eq '^(install|hold) ok installed$'; }
 pkg_version() { dpkg-query -W -f='${Version}' "$1" 2>/dev/null || true; }
 
+# On a fresh VM apt-daily or unattended-upgrades may hold the package lists lock for minutes:
+# wait for it (up to 10 min) instead of failing; other errors are retried 3 times.
 apt_refresh() {
   ((APT_UPDATED)) && return 0
   info "apt-get update"
-  retry 3 10 apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update -qq >/dev/null ||
-    die "apt-get update failed: check access to the Ubuntu archive and $K8S_REPO"
+  local err fails=0 waits=0
+  err="$(mktemp)"
+  until apt-get -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 update -qq >/dev/null 2>"$err"; do
+    if grep -q 'Could not get lock' "$err" && ((waits < 60)); then
+      if ((waits == 0)); then
+        info "apt is busy (apt-daily or unattended-upgrades): waiting for the lock, up to 10 min"
+      fi
+      waits=$((waits + 1))
+    elif ((++fails >= 3)); then
+      cat "$err" >&2
+      rm -f "$err"
+      die "apt-get update failed: check access to the Ubuntu archive and $K8S_REPO"
+    fi
+    sleep 10
+  done
+  rm -f "$err"
   APT_UPDATED=1
 }
 
@@ -122,6 +138,20 @@ if bad="$(sysctl_mismatch)"; then
   die "kernel parameter $bad after applying $SYSCTL_FILE: something else overrides it (check /etc/sysctl.d, /run/sysctl.d, /etc/sysctl.conf)"
 fi
 ok "kernel parameters verified: ${sysctls[*]}"
+
+# ---------- NetworkManager (Ubuntu Desktop) ----------
+# On Ubuntu Desktop NetworkManager manages every interface, including the ones Calico creates, and
+# may take them over or touch their routes. Calico's documentation asks to leave them unmanaged.
+# Ubuntu Server (systemd-networkd) skips this.
+if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+  step "node: NetworkManager"
+  write_file /etc/NetworkManager/conf.d/kube-gateway-stand-calico.conf 0644 < <(printf '%s\n' "$MARKER" '[keyfile]' \
+    'unmanaged-devices=interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico;interface-name:vxlan-v6.calico')
+  if ((WRITE_CHANGED)); then
+    systemctl reload NetworkManager || warn "cannot reload NetworkManager; the Calico interfaces become unmanaged after its restart"
+    changed "NetworkManager: Calico interfaces unmanaged"
+  fi
+fi
 
 # ---------- containerd ----------
 step "node: containerd ($CONTAINERD_SOURCE)"
