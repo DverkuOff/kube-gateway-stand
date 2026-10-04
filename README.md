@@ -20,11 +20,11 @@ kube-prometheus-stack 91.9.0 (Prometheus v3.15, Grafana 13.2) · Fluentd 1.19.3 
 ```bash
 git clone https://github.com/DverkuOff/kube-gateway-stand.git
 cd kube-gateway-stand
-sudo ./deploy.sh     # 6–8 мин на 4 vCPU / 8 ГБ; заодно ставит make
+sudo ./deploy.sh     # 6–9 мин на 4 vCPU / 8 ГБ; заодно ставит make
 make check           # 25 проверок: кластер, Gateway API, TLS, маршруты, метрики, логи
 ```
 
-Развёртывание занимает 6–8 мин на 4 vCPU / 8 ГБ и 9–10 мин на 2 vCPU / 4 ГБ. В конце вывода `deploy.sh` будут
+Развёртывание занимает 6–9 мин на 4 vCPU / 8 ГБ и 9–10 мин на 2 vCPU / 4 ГБ. В конце вывода `deploy.sh` будут
 адреса и следующие команды, а `make check` закончится строкой
 `25 passed, 0 failed`. Так выглядит конец вывода на чистой Ubuntu 24.04 (ВМ с адресом `192.168.122.10`),
 где эти четыре команды выполнены дословно:
@@ -755,9 +755,9 @@ The same queries are on the Grafana dashboard "Web: golden signals" (./scripts/c
 `WebHighErrorRatio`, `WebHighLatencyP95`, `TraefikDown`, `CertificateExpiringSoon`, `CertificateNotReady`,
 `FluentdOutputErrors`, `FluentdBufferNearLimit`, `LokiDiscardingLines`, `LokiNotReceivingLogs`, `WebLogsMissing`
 и recording rule `web:traefik_requests:rate5m`. К ним добавляются стандартные правила kube-prometheus-stack
-(всего 139 алертов в 36 группах). На здоровом кластере горят только `Watchdog` (всегда, по замыслу) и примерно
-через 15 мин после деплоя `PrometheusNotConnectedToAlertmanagers`: Alertmanager выключен намеренно, поэтому
-уведомления никуда не отправляются (см. [ограничения](#известные-ограничения)).
+(всего 138 алертов в 36 группах). На здоровом кластере горит только `Watchdog` (всегда, по замыслу). Alertmanager
+выключен намеренно, поэтому правило `PrometheusNotConnectedToAlertmanagers` отключено, а уведомления никуда
+не отправляются (см. [ограничения](#известные-ограничения)).
 
 ## Проверка логов
 
@@ -871,10 +871,10 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   `changed=0` → `make check`. На раннерах уже стоит `containerd.io` от Docker, preflight сам выбирает
   `CONTAINERD_SOURCE=docker`, так что заодно проверяется хост с Docker. Статус — на бейдже вверху.
 
-  | Прогон e2e (коммит `295d3cb`) | Раннер | Первый деплой | Повторный деплой | `make check` после каждого |
+  | Прогон e2e (коммит `72b954d`) | Раннер | Первый деплой | Повторный деплой | `make check` после каждого |
   |---|---|---|---|---|
-  | [37204932290](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37204932290) | `ubuntu-24.04` (amd64) | 285 с, `ok=47 changed=46` | 18 с, `ok=90 changed=0` | 25/25 и 25/25 |
-  | [37204932290](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37204932290) | `ubuntu-24.04-arm` (arm64) | 278 с, `ok=47 changed=46` | 15 с, `ok=90 changed=0` | 25/25 и 25/25 |
+  | [37214335230](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37214335230) | `ubuntu-24.04` (amd64) | 318 с, `ok=47 changed=46` | 16 с, `ok=90 changed=0` | 25/25 и 25/25 |
+  | [37214335230](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37214335230) | `ubuntu-24.04-arm` (arm64) | 268 с, `ok=47 changed=46` | 16 с, `ok=90 changed=0` | 25/25 и 25/25 |
 
 **Надёжность и безопасность**
 - Pod Security Admission: `web` и `cert-manager` — restricted. `gateway` (hostPort), `monitoring` (node-exporter)
@@ -947,9 +947,9 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   Остаются пакеты (containerd, kubeadm/kubelet/kubectl, Helm), настройки ядра и `out/` в репозитории.
   На полном стеке destroy занимает 3–8 с. Следующий деплой (образы уже в кэше) на диске 40 ГБ проходит за 225–249 с,
   после него `make check` даёт 25/25.
-- **С нуля:** `make destroy YES=1 && make deploy`. Если после `make destroy` preflight остановится на проверке
-  20 GiB свободного места на `/var` (диск меньше ~36 ГБ, образы прошлого кластера остались в кэше), освободите кэш
-  образов: `sudo crictl rmi --prune` (следующий деплой скачает их заново).
+- **С нуля:** `make destroy YES=1 && make deploy`. Образы прошлого кластера остаются в кэше containerd, и preflight
+  засчитывает их в свободное место на `/var`, поэтому цикл проходит и на диске 30 ГБ (проверено). Освободить кэш
+  можно командой `sudo crictl rmi --prune`: следующий деплой скачает образы заново.
 
 ## Известные ограничения
 
