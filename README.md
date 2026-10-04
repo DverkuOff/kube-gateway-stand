@@ -13,16 +13,17 @@
 ```bash
 git clone https://github.com/DverkuOff/kube-gateway-stand.git
 cd kube-gateway-stand
-sudo ./deploy.sh     # ~6,5 мин на 4 vCPU / 8 ГБ; заодно ставит make
+sudo ./deploy.sh     # 6–8 мин на 4 vCPU / 8 ГБ; заодно ставит make
 make check           # 25 проверок: кластер, Gateway API, TLS, маршруты, метрики, логи
 ```
 
-Через ~7 минут эксперт увидит в конце вывода `deploy.sh` адреса и команды, а `make check` закончится строкой
-`25 passed, 0 failed`. Пример с нашей ВМ, где адрес узла `192.168.122.10`:
+Через 6–8 минут эксперт увидит в конце вывода `deploy.sh` адреса и команды, а `make check` закончится строкой
+`25 passed, 0 failed`. Пример с нашей ВМ, где адрес узла `192.168.122.10` (эти четыре команды, скопированные
+из README, на чистой Ubuntu 24.04):
 
 ```text
-Done: ok=44 changed=48
-Elapsed: 387s
+Done: ok=45 changed=48
+Elapsed: 459s
 ==> access
     Application:     https://app.192.168.122.10.sslip.io/
     Grafana:         https://grafana.192.168.122.10.sslip.io/   (login and password: make creds)
@@ -280,14 +281,15 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
    | Стадия | Что делает | Время |
    |---|---|---|
    | `00-preflight` | ОС, ресурсы, cgroup v2, свободные порты, пересечение сетей, доступ к реестрам | 3 с |
-   | `10-node` | модули и sysctl ядра, swap, containerd, kubeadm/kubelet/kubectl (hold), Helm | 59 с |
-   | `20-cluster` | `kubeadm init`, kubeconfig пользователя (`~/.kube/config`), Calico, local-path | 96 с |
-   | `30-platform` | CRD Gateway API и Prometheus Operator, namespaces с PSA, cert-manager, Traefik, GatewayClass/Gateway, TLS | 48 с |
-   | `40-app` | приложение v1/v2, HTTPRoute, rate limit, NetworkPolicy | 13 с |
-   | `50-monitoring` | Secret Grafana, kube-prometheus-stack, дашборды, алерты, маршрут Grafana | 87 с |
-   | `60-logging` | Loki, Fluentd | 81 с |
+   | `10-node` | модули и sysctl ядра, swap, containerd, kubeadm/kubelet/kubectl (hold), Helm | 66 с |
+   | `20-cluster` | `kubeadm init`, kubeconfig пользователя (`~/.kube/config`), Calico, local-path | 136 с |
+   | `30-platform` | CRD Gateway API и Prometheus Operator, namespaces с PSA, cert-manager, Traefik, GatewayClass/Gateway, TLS | 63 с |
+   | `40-app` | приложение v1/v2, HTTPRoute, rate limit, NetworkPolicy | 10 с |
+   | `50-monitoring` | Secret Grafana, kube-prometheus-stack, дашборды, алерты, маршрут Grafana | 98 с |
+   | `60-logging` | Loki, Fluentd | 83 с |
 
-4. В конце `deploy.sh` печатает итог `Done: ok=44 changed=48`, `Elapsed: 387s` (6 мин 27 с на чистой ВМ),
+4. В конце `deploy.sh` печатает итог `Done: ok=45 changed=48`, `Elapsed: 459s` (7 мин 39 с на чистой ВМ; большую часть
+   времени занимает загрузка образов, поэтому на другой сети цифра другая, прежние прогоны давали 387–460 с),
    адреса и следующие команды (пример — в [Быстром старте](#быстрый-старт)). В выводе есть три строки
    `warning ... outside Pod Security "restricted:latest"` для Traefik, node-exporter и Fluentd. Так задумано:
    у этих namespace enforce=privileged, но warn=restricted, поэтому каждое послабление видно.
@@ -301,16 +303,16 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
        ok       architecture amd64
        ok       systemd is PID 1
        ok       cgroup v2
+       ok       system clock synchronized
    ==> preflight: existing cluster
        ok       no Kubernetes cluster on this host yet
    ==> preflight: resources
        ok       CPUs: 4
-       ok       RAM: 7.8 GiB (profile: default)
+       ok       RAM: 7.8 GiB (profile: default, auto)
        ok       free disk on /var: 36 GiB
    ==> preflight: network
        ok       NODE_IP 192.168.122.10 is a local address
        ok       POD_CIDR 10.244.0.0/16 and SVC_CIDR 10.96.0.0/16 do not overlap with host networks
-       warning  system clock is not NTP-synchronized; certificates and etcd need a correct clock (timedatectl set-ntp true)
        ok       ports 6443 2379 2380 10250 10257 10259 80 443 are free
    ==> preflight: container runtime
        ok       containerd source: Ubuntu archive (>= 2.0)
@@ -361,7 +363,7 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
        ok       containerd CRI: SystemdCgroup=true
    ==> node: helm v4.3.0
        changed  helm v4.3.0 installed to /usr/local/bin/helm (sha256 verified)
-       stage 10-node took 59s
+       stage 10-node took 66s
    ==> stage 20-cluster
    ==> cluster: control plane
        changed  /var/lib/kube-gateway-stand/kubeadm-config.yaml
@@ -386,7 +388,7 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
        ok       local-path-provisioner Available
    ==> cluster: CoreDNS
        ok       CoreDNS Available
-       stage 20-cluster took 96s
+       stage 20-cluster took 136s
    ==> stage 30-platform
    ==> CRDs: Gateway API v1.6.2, Prometheus Operator v0.94.1
        changed  downloaded gateway-api-standard-v1.6.2.yaml
@@ -410,14 +412,14 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
        ok       Gateway web Programmed, address 192.168.122.10
        changed  /home/ubuntu/kube-gateway-stand/out/ca.crt
        CA for clients: /home/ubuntu/kube-gateway-stand/out/ca.crt (curl --cacert /home/ubuntu/kube-gateway-stand/out/ca.crt https://app.192.168.122.10.sslip.io/)
-       stage 30-platform took 48s
+       stage 30-platform took 63s
    ==> stage 40-app
    ==> web app v1/v2 (canary weight v2=20%)
        changed  helm release web/web (local)
        ok       canary weight of v2 in HTTPRoute web/web: 20%
        ok       HTTPRoute web Accepted, backends resolved
        ok       https://app.192.168.122.10.sslip.io/ -> Hello World! (v1)
-       stage 40-app took 13s
+       stage 40-app took 10s
    ==> stage 50-monitoring
    ==> monitoring: prerequisites
        ok       namespace monitoring and CRDs present
@@ -426,14 +428,14 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
    ==> monitoring: Grafana sidecar Role
        changed  applied: Role monitoring/grafana-sidecar
    ==> monitoring: kube-prometheus-stack 91.9.0
-       changed  helm release monitoring/kps (91.9.0)
        warning  monitoring/kps: allowed, but outside Pod Security "restricted:latest": host namespaces (hostNetwork=true, hostPID=true), probe or lifecycle host (container "node-exporter" uses probe or lifecycle host "127.0.0.1"), restricted volume types (volumes "proc", "sys", "root" use restricted volume type "hostPath"), seccompProfile (pod or containers "node-exporter", "kube-rbac-proxy" must set securityContext.seccompProfile.type to "RuntimeDefault" or "Localhost")
+       changed  helm release monitoring/kps (91.9.0)
        ok       Prometheus available
    ==> monitoring: Grafana route, alerts, dashboards
        changed  helm release monitoring/observability (local)
        ok       HTTPRoute monitoring/grafana accepted by the Gateway
        Grafana: https://grafana.192.168.122.10.sslip.io  (login and password: ./scripts/creds.sh)
-       stage 50-monitoring took 87s
+       stage 50-monitoring took 98s
    ==> stage 60-logging
    ==> logging: prerequisites
        ok       default StorageClass present
@@ -445,10 +447,10 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
        changed  helm release logging/fluentd (0.6.0)
        ok       Fluentd running on every node (metrics :24231/metrics)
        check end-to-end delivery: ./scripts/demo-logs.sh
-       stage 60-logging took 81s
+       stage 60-logging took 83s
 
-   Done: ok=44 changed=48
-   Elapsed: 387s
+   Done: ok=45 changed=48
+   Elapsed: 459s
    ==> access
        Application:     https://app.192.168.122.10.sslip.io/
        Grafana:         https://grafana.192.168.122.10.sslip.io/   (login and password: make creds)
@@ -501,7 +503,7 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
 | 8 | запрос с уникальным `X-Request-ID` находится в Loki в логах шлюза и приложения |
 | 9 | Prometheus/Loki/Alertmanager не опубликованы; Grafana требует логин; метки PSA; NetworkPolicy в `web`, `monitoring`, `logging`; порты 2381 (etcd) и 9100 (node-exporter) без аутентификации закрыты |
 
-<details><summary>Вывод <code>make check</code> сразу после первого развёртывания (25 passed, 0 failed, 26 с)</summary>
+<details><summary>Вывод <code>make check</code> сразу после первого развёртывания (25 passed, 0 failed)</summary>
 
 ```text
 Cluster checks  node=192.168.122.10  app=app.192.168.122.10.sslip.io  grafana=grafana.192.168.122.10.sslip.io
@@ -550,11 +552,11 @@ Cluster checks  node=192.168.122.10  app=app.192.168.122.10.sslip.io  grafana=gr
 
 5. Rate limit
   5.1   PASS  burst gets 429, service recovers after a pause
-              burst of 100 parallel requests: 200=41 429=59; after 3 s pause: 200
+              burst of 100 parallel requests: 200=42 429=58; after 3 s pause: 200
 
 6. Errors
   6.1   PASS  unknown path -> 404
-              https://app.192.168.122.10.sslip.io/no-such-page-32048 -> 404
+              https://app.192.168.122.10.sslip.io/no-such-page-25001 -> 404
 
 7. Metrics
   7.1   PASS  Prometheus targets up
@@ -562,23 +564,25 @@ Cluster checks  node=192.168.122.10  app=app.192.168.122.10.sslip.io  grafana=gr
   7.2   PASS  key scrape jobs present and up
               traefik 1/1, node-exporter 1/1, kubelet 3/3, apiserver 1/1, kube-state-metrics 1/1, coredns 2/2, kube-scheduler 1/1, kube-controller-manager 1/1, web (app exporter) 3/3, fluentd 1/1, loki 1/1, cert-manager 1/1
   7.3   PASS  traefik_service_requests_total grows with traffic
-              sum(traefik_service_requests_total): 1 -> 105
+              sum(traefik_service_requests_total): 1 -> 271
 
 8. Logs
   8.1   PASS  request with X-Request-ID reaches Loki: gateway access log
-              X-Request-ID check-1791113070-1048321698 found in gateway logs after 3s
+              X-Request-ID check-1791119058-2188512603 found in gateway logs after 3s
   8.2   PASS  request with X-Request-ID reaches Loki: application access log
-              X-Request-ID check-1791113070-1048321698 found in application logs after 3s
+              X-Request-ID check-1791119058-2188512603 found in application logs after 3s
 
 9. Security
   9.1   PASS  Prometheus/Loki/Alertmanager not exposed
               Prometheus, Loki and Alertmanager have no HTTPRoute, NodePort or LoadBalancer
   9.2   PASS  Grafana requires login
-              anonymous GET https://grafana.192.168.122.10.sslip.io/api/search -> 401
+              anonymous GET https://grafana.192.168.122.10.sslip.io/api/search -> 401 
   9.3   PASS  Pod Security Admission labels on namespaces
               enforce: gateway=privileged web=restricted monitoring=privileged logging=privileged cert-manager=restricted
-  9.4   PASS  NetworkPolicy in ns web
+  9.4   PASS  NetworkPolicy in ns web, monitoring, logging
               ns web: default-deny web-allow-gateway web-allow-metrics
+              ns monitoring: prometheus-ingress
+              ns logging: loki-ingress
   9.5   PASS  etcd metrics port 2381 closed on the node IP
               http://192.168.122.10:2381 -> connection refused (etcd metrics only on 127.0.0.1)
   9.6   PASS  node-exporter port 9100 not open without authentication
@@ -628,8 +632,8 @@ X-Version: v2   -> Hello World! (v2)
      20 Hello World! (v2)
 
 # 100 параллельных запросов (rate limit 20 rps, burst 40)
-     42 CODE:200
-     58 CODE:429
+     49 200
+     51 429
 ```
 
 Сертификат шлюза выпущен cert-manager от собственного CA (`kube-gateway-stand CA`) для `*.<NODE_IP>.sslip.io`,
@@ -818,6 +822,8 @@ $ make demo-logs
 Вручную, без скрипта:
 
 ```bash
+NODE_IP=$(kubectl get gateway web -n gateway -o jsonpath='{.status.addresses[0].value}')
+APP=app.$NODE_IP.sslip.io
 RID=demo-$RANDOM
 curl -s --cacert out/ca.crt --resolve $APP:443:$NODE_IP -H "X-Request-ID: $RID" https://$APP/
 sleep 5
@@ -871,10 +877,10 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   `changed=0` → `make check`. На раннерах уже стоит `containerd.io` от Docker, preflight сам выбирает
   `CONTAINERD_SOURCE=docker`, так что заодно проверяется хост с Docker. Статус — на бейдже вверху.
 
-  | Прогон e2e | Архитектура | Первый деплой | Повторный деплой | `make check` |
+  | Прогон e2e (коммит `7f6281b`) | Раннер | Первый деплой | Повторный деплой | `make check` после каждого |
   |---|---|---|---|---|
-  | [37199624323](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37199624323) | amd64 | 286 с, `ok=47 changed=46` | 12 с, `changed=0` | 25/25 и 25/25 |
-  | [37199624323](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37199624323) | arm64 | 275 с | 14 с, `changed=0` | 25/25 и 25/25 |
+  | [37203765306](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37203765306) | `ubuntu-24.04` (amd64) | 309 с, `ok=47 changed=46` | 18 с, `ok=90 changed=0` | 25/25 и 25/25 |
+  | [37203765306](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37203765306) | `ubuntu-24.04-arm` (arm64) | 286 с, `ok=47 changed=46` | 16 с, `ok=90 changed=0` | 25/25 и 25/25 |
 
 **Надёжность и безопасность**
 - Pod Security Admission: `web` и `cert-manager` — restricted. `gateway` (hostPort), `monitoring` (node-exporter)
@@ -889,7 +895,7 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   удалить, следующий деплой создаст новый пароль и перезапустит Grafana. На маршруте Grafana те же заголовки
   HSTS и `nosniff`, что и у приложения; перебор паролей ограничивает сама Grafana.
 - Закреплённые версии всех компонентов, apt hold пакетов Kubernetes и containerd, проверка sha256 Helm.
-- Проверено: перезагрузка узла (все поды Ready через ~75 с, `make check` 25/25) и цикл destroy → deploy (25/25).
+- Проверено: перезагрузка узла (через ~1,5 мин после загрузки `make check` 25/25) и цикл destroy → deploy (25/25).
 
 ## Повторный запуск и удаление
 
@@ -899,10 +905,11 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
 
   ```text
   Done: ok=90 changed=0
-  Elapsed: 21s
+  Elapsed: 31s
   ```
 
-  Ревизии всех девяти релизов Helm до и после остались равны 1.
+  Ревизии всех девяти релизов Helm до и после остались равны 1. После перезагрузки узла повторный запуск тоже
+  даёт `changed=0`.
 - **Восстановление.** Повторный запуск возвращает то, что удалили или поменяли руками, и разбирает последствия
   прерванного запуска:
   - удалённые объекты релизов Helm (Deployment, Service, HTTPRoute, NetworkPolicy и т. д.): прежде чем пропустить
