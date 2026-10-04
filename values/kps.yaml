@@ -16,6 +16,9 @@ defaultRules:
   create: true
   rules:
     alertmanager: false
+  # Alertmanager is disabled on purpose (see above): this rule would fire ~15 min after every deployment.
+  disabled:
+    PrometheusNotConnectedToAlertmanagers: true
 
 # --- control plane targets -------------------------------------------------------------
 # etcd and kube-proxy expose metrics on 127.0.0.1 only (deliberately, no plain-HTTP metrics on
