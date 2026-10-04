@@ -20,11 +20,12 @@ kube-prometheus-stack 91.9.0 (Prometheus v3.15, Grafana 13.2) · Fluentd 1.19.3 
 ```bash
 git clone https://github.com/DverkuOff/kube-gateway-stand.git
 cd kube-gateway-stand
-sudo ./deploy.sh     # 6–8 мин на 4 vCPU / 8 ГБ, на 2 vCPU / 4 ГБ — 9–10 мин; заодно ставит make
+sudo ./deploy.sh     # 6–8 мин на 4 vCPU / 8 ГБ; заодно ставит make
 make check           # 25 проверок: кластер, Gateway API, TLS, маршруты, метрики, логи
 ```
 
-В конце вывода `deploy.sh` будут адреса и следующие команды, а `make check` закончится строкой
+Развёртывание занимает 6–8 мин на 4 vCPU / 8 ГБ и 9–10 мин на 2 vCPU / 4 ГБ. В конце вывода `deploy.sh` будут
+адреса и следующие команды, а `make check` закончится строкой
 `25 passed, 0 failed`. Так выглядит конец вывода на чистой Ubuntu 24.04 (ВМ с адресом `192.168.122.10`),
 где эти четыре команды выполнены дословно:
 
