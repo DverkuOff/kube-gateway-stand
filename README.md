@@ -13,7 +13,7 @@
 ```bash
 git clone https://github.com/DverkuOff/kube-gateway-stand.git
 cd kube-gateway-stand
-sudo ./deploy.sh     # то же, что make deploy; ~6,5 мин на 4 vCPU / 8 ГБ
+sudo ./deploy.sh     # ~6,5 мин на 4 vCPU / 8 ГБ; заодно ставит make
 make check           # 25 проверок: кластер, Gateway API, TLS, маршруты, метрики, логи
 ```
 
@@ -62,7 +62,7 @@ Hello World! (v1)
 | Gateway API: реализация, GatewayClass, Gateway, HTTPRoute → Service | [`values/traefik.yaml`](values/traefik.yaml), [`charts/platform`](charts/platform), [`charts/web/templates/httproute.yaml`](charts/web/templates/httproute.yaml) | `kubectl get gatewayclass,gateway,httproute -A`, п. 2.1–2.3 и 4.1–4.4 |
 | Prometheus собирает метрики, есть PromQL | [`values/kps.yaml`](values/kps.yaml), ServiceMonitor в [`charts/web`](charts/web/templates/servicemonitor.yaml) и [`values/traefik.yaml`](values/traefik.yaml) | `make demo-metrics`, п. 7.1–7.3 |
 | Fluentd собирает access/error-логи в хранилище | [`values/fluentd.yaml`](values/fluentd.yaml), [`values/loki.yaml`](values/loki.yaml), [`images/fluentd`](images/fluentd) | `make demo-logs`, п. 8.1–8.2 |
-| Работает на Ubuntu 24.04 | [`scripts/00-preflight.sh`](scripts/00-preflight.sh), [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) | прогон на чистой Ubuntu 24.04.5 LTS ([Kubernetes](#kubernetes)), workflow e2e |
+| Работает на Ubuntu 24.04 | [`scripts/00-preflight.sh`](scripts/00-preflight.sh), [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml) | прогон на чистой Ubuntu 24.04.5 LTS ([Kubernetes](#kubernetes)), workflow e2e на amd64 и arm64 |
 | Воспроизводимость и идемпотентность, минимум команд | [`deploy.sh`](deploy.sh), [`scripts/lib.sh`](scripts/lib.sh), [`versions.env`](versions.env), [`Makefile`](Makefile) | повторный `sudo ./deploy.sh` → `changed=0`, ревизии Helm не растут |
 | Секретов в репозитории нет | пароль Grafana генерирует [`scripts/50-monitoring.sh`](scripts/50-monitoring.sh) и хранит только в Secret | `make creds`, п. 9.2 |
 | Сверх базы: TLS, редирект, split, маршруты по заголовку/query/пути, rate limit, дашборды, алерты, CI | см. [Дополнительные возможности](#дополнительные-возможности) | п. 3.1, 4.x, 5.1, 9.x |
@@ -163,7 +163,7 @@ flowchart LR
 | Сети | pod `10.244.0.0/16`, service `10.96.0.0/16` (preflight проверяет пересечение с сетями хоста) |
 | CNI | Calico v3.32.2, VXLAN, portmap для hostPort |
 | Хранилище | local-path-provisioner (StorageClass по умолчанию) для PVC Prometheus и Loki |
-| ОС, на которой проверено | Ubuntu 24.04.5 LTS amd64, ядро 6.8.0-142-generic; ВМ KVM 4 vCPU / 8 ГБ / 40 ГБ, чистая установка |
+| ОС, на которой проверено | Ubuntu 24.04.5 LTS amd64, ядро 6.8.0-142-generic; ВМ KVM 4 vCPU / 8 ГБ / 40 ГБ и 2 vCPU / 4 ГБ / 30 ГБ, чистая установка. В CI — раннеры GitHub `ubuntu-24.04` (amd64) и `ubuntu-24.04-arm` (arm64) |
 
 ```console
 $ kubectl get nodes -o wide
@@ -212,8 +212,8 @@ web          web             ["app.192.168.122.10.sslip.io"]       5m49s
 | | Минимум | Рекомендуется (проверено) |
 |---|---|---|
 | ОС | Ubuntu 24.04 LTS, чистая установка, systemd, cgroup v2 | то же |
-| Архитектура | amd64 | amd64 (arm64 допускается preflight'ом, но полным прогоном не проверялся) |
-| CPU / RAM | 2 vCPU / 4 ГБ с `PROFILE=small` (уточняется) | 4 vCPU / 8 ГБ |
+| Архитектура | amd64 или arm64 | amd64 (ВМ KVM); arm64 — в CI на раннере `ubuntu-24.04-arm` |
+| CPU / RAM | 2 vCPU / 4 ГБ (профиль `small` выбирается сам, проверено) | 4 vCPU / 8 ГБ |
 | Диск | 20 ГБ свободно на `/var` (проверяет preflight) | 40 ГБ; после развёртывания занято 8.7 ГБ (из них образы ~5.8 ГБ) |
 | Доступ | `sudo` | — |
 | Порты | 80, 443, 6443, 2379–2380, 10250, 10257, 10259 свободны | — |
@@ -222,6 +222,11 @@ web          web             ["app.192.168.122.10.sslip.io"]       5m49s
 Preflight останавливает развёртывание, если CPU меньше 2 или RAM меньше 3.5 GiB. Если `PROFILE` не задан, а RAM
 меньше 7 GiB, автоматически выбирается `PROFILE=small`: меньше requests/limits и хранение (Prometheus 1 день / 1 ГБ,
 Loki 48 ч). Явный `PROFILE=default` на такой машине даёт предупреждение.
+
+**Проверено на 2 vCPU / 4 ГБ** (Ubuntu 24.04, диск 30 ГБ, без swap): preflight сам выбирает `PROFILE=small`,
+развёртывание занимает ~520 с, `make check` — 25/25, повторный запуск — `changed=0`. После развёртывания свободно
+~750 МиБ RAM, requests 1275m CPU / 1.5 GiB памяти, ни одного рестарта, OOMKilled или eviction. Около 0.9 ГБ на такой
+машине занимает сам control plane (kube-apiserver), поэтому меньше 4 ГБ не поддерживается.
 
 Заранее ставить ничего не нужно: `deploy.sh` сам ставит containerd, kubeadm/kubelet/kubectl, Helm (с проверкой sha256)
 и нужные утилиты. Что он делает с хостом:
@@ -232,6 +237,9 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
 - **уже установленный Docker** (`containerd.io` из его репозитория): если `CONTAINERD_SOURCE` не задан, автоматически
   выбирается `CONTAINERD_SOURCE=docker`, конфиг containerd сохраняется в копию и заменяется (включается CRI).
   Явный `CONTAINERD_SOURCE=ubuntu` в этом случае останавливает развёртывание с подсказкой, чтобы не снести рантайм Docker;
+- **NetworkManager** (Ubuntu Desktop): интерфейсы Calico (`cali*`, `vxlan.calico`, `tunl*`) помечаются как
+  unmanaged в `/etc/NetworkManager/conf.d/kube-gateway-stand-calico.conf`, как требует документация Calico.
+  На Ubuntu Server (systemd-networkd) шаг пропускается;
 - **другой кластер:** если на хосте есть следы `kubeadm init`, но кластер не в порядке, preflight ничего не меняет
   и предлагает `make destroy`.
 
@@ -244,10 +252,10 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
    cd kube-gateway-stand
    ```
 
-2. Запустить развёртывание (спросит пароль sudo):
+2. Запустить развёртывание (спросит пароль sudo). Первый запуск по SSH лучше делать в `tmux` или `screen`:
 
    ```bash
-   sudo ./deploy.sh     # или make deploy
+   sudo ./deploy.sh     # make deploy — то же самое, но make на чистой Ubuntu Server появляется только после deploy.sh
    ```
 
    Необязательные параметры передаются через окружение (`sudo PROFILE=small ./deploy.sh`
@@ -255,13 +263,16 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
 
    | Переменная | По умолчанию | Назначение |
    |---|---|---|
-   | `NODE_IP` | адрес источника маршрута по умолчанию | IP узла, на котором публикуется шлюз |
+   | `NODE_IP` | адрес источника маршрута по умолчанию | IP узла, на котором публикуется шлюз (если адресов несколько, preflight предупредит) |
    | `PROFILE` | `default` (`small`, если RAM < 7 GiB) | `small` — меньше requests и хранение для 2 vCPU / 4 ГБ |
    | `POD_CIDR` / `SVC_CIDR` | `10.244.0.0/16` / `10.96.0.0/16` | сети кластера |
    | `DOCKERHUB_MIRROR` | `https://mirror.gcr.io` | зеркало для docker.io; `""` — тянуть напрямую |
    | `CONTAINERD_SOURCE` | `ubuntu` (или `docker`, если уже стоит `containerd.io`) | откуда брать containerd |
    | `CANARY_WEIGHT` | `20` | доля трафика `/` на v2, % |
    | `ONLY_STAGES` | все | подмножество стадий, например `"40-app 50-monitoring"` |
+   | `HOST_SUFFIX` | `<NODE_IP>.sslip.io` | DNS-суффикс хостов приложения и Grafana |
+   | `HELM_TIMEOUT` | `10m` | сколько ждать готовности одного Helm-релиза (медленная сеть) |
+   | `FLUENTD_IMAGE`, `FLUENTD_IMAGE_TAG` | из [`versions.env`](versions.env) (ghcr.io) | образ Fluentd из зеркала, если ghcr.io недоступен |
 
 3. Стадии выполняются по порядку. Каждая сначала проверяет состояние, меняет только разницу и печатает
    `ok` / `changed`. Время стадий на 4 vCPU / 8 ГБ при первом запуске:
@@ -462,7 +473,7 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
 
 | Команда | Что делает |
 |---|---|
-| `make deploy` | `sudo ./deploy.sh`: развернуть или довести до нужного состояния (идемпотентно) |
+| `make deploy` | `sudo ./deploy.sh`: развернуть или довести до нужного состояния (идемпотентно; make ставит первый `deploy.sh`) |
 | `make check` | сквозная проверка, PASS/FAIL по каждому пункту, ненулевой код выхода при ошибке |
 | `make creds` | адреса, логин и пароль Grafana |
 | `make demo-logs` | запрос с уникальным `X-Request-ID` и поиск его в Loki |
@@ -488,7 +499,7 @@ Loki 48 ч). Явный `PROFILE=default` на такой машине даёт 
 | 6 | несуществующий путь → 404 |
 | 7 | все цели Prometheus up, ключевые job на месте, `traefik_service_requests_total` растёт с трафиком |
 | 8 | запрос с уникальным `X-Request-ID` находится в Loki в логах шлюза и приложения |
-| 9 | Prometheus/Loki/Alertmanager не опубликованы; Grafana требует логин; метки PSA; NetworkPolicy; порты 2381 (etcd) и 9100 (node-exporter) без аутентификации закрыты |
+| 9 | Prometheus/Loki/Alertmanager не опубликованы; Grafana требует логин; метки PSA; NetworkPolicy в `web`, `monitoring`, `logging`; порты 2381 (etcd) и 9100 (node-exporter) без аутентификации закрыты |
 
 <details><summary>Вывод <code>make check</code> сразу после первого развёртывания (25 passed, 0 failed, 26 с)</summary>
 
@@ -855,17 +866,28 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
 - `lint`: shellcheck, yamllint, actionlint, проверка JSON дашбордов, `helm lint` и `helm template | kubeconform`
   (с CRD-схемами). Локально то же самое запускает `make lint`.
 - `image`: сборка образа Fluentd (amd64 + arm64), smoke-тест конфигурации, публикация в GHCR с provenance и SBOM.
-- `e2e` (запускается вручную, workflow_dispatch): полный `deploy.sh` на чистом раннере `ubuntu-24.04`
-  (там уже есть `containerd.io` от Docker, поэтому `CONTAINERD_SOURCE=docker`) → `make check` → повторный деплой
-  с `changed=0` → `make check`. Статус — на бейдже вверху.
+- `e2e` (на каждый push в main, кроме документации, и вручную): полный `deploy.sh` на чистых раннерах GitHub
+  `ubuntu-24.04` (amd64) и `ubuntu-24.04-arm` (arm64) → `make check` → повторный деплой, который обязан дать
+  `changed=0` → `make check`. На раннерах уже стоит `containerd.io` от Docker, preflight сам выбирает
+  `CONTAINERD_SOURCE=docker`, так что заодно проверяется хост с Docker. Статус — на бейдже вверху.
+
+  | Прогон e2e | Архитектура | Первый деплой | Повторный деплой | `make check` |
+  |---|---|---|---|---|
+  | [37199624323](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37199624323) | amd64 | 286 с, `ok=47 changed=46` | 12 с, `changed=0` | 25/25 и 25/25 |
+  | [37199624323](https://github.com/DverkuOff/kube-gateway-stand/actions/runs/37199624323) | arm64 | 275 с | 14 с, `changed=0` | 25/25 и 25/25 |
 
 **Надёжность и безопасность**
 - Pod Security Admission: `web` и `cert-manager` — restricted. `gateway` (hostPort), `monitoring` (node-exporter)
   и `logging` (hostPath) — privileged, но с warn/audit=restricted, чтобы любое послабление было видно.
 - NetworkPolicy default-deny в `web`: входящий трафик только от шлюза (HTTP) и Prometheus (метрики).
+- NetworkPolicy для Prometheus и Loki (у них нет аутентификации): подключаться могут только поды `monitoring`
+  и `logging` (Grafana, скрейпы, Fluentd). Под из другого namespace получает таймаут. `make check` и демо-скрипты
+  ходят к ним через API-сервер с самого узла, а такой трафик NetworkPolicy пропускает всегда.
 - Поды приложения: non-root, read-only rootfs, drop ALL, seccomp RuntimeDefault, probes, requests/limits, PDB.
 - Prometheus, Loki и дашборд Traefik наружу не публикуются. Grafana открывается только с логином, анонимный доступ выключен.
-- Пароль Grafana генерируется при развёртывании и хранится только в Secret. В git и в логах его нет.
+- Пароль Grafana генерируется при развёртывании и хранится только в Secret. В git и в логах его нет. Если Secret
+  удалить, следующий деплой создаст новый пароль и перезапустит Grafana. На маршруте Grafana те же заголовки
+  HSTS и `nosniff`, что и у приложения; перебор паролей ограничивает сама Grafana.
 - Закреплённые версии всех компонентов, apt hold пакетов Kubernetes и containerd, проверка sha256 Helm.
 - Проверено: перезагрузка узла (все поды Ready через ~75 с, `make check` 25/25) и цикл destroy → deploy (25/25).
 
@@ -881,9 +903,32 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
   ```
 
   Ревизии всех девяти релизов Helm до и после остались равны 1.
-- **Восстановление.** Если прошлый запуск прервался, повторный продолжит с текущего состояния: релиз Helm,
-  который упал, будет установлен заново. Веса canary, изменённые `make canary`, деплой вернёт к `CANARY_WEIGHT`
-  (`changed=1`, поды не перезапускаются).
+- **Восстановление.** Повторный запуск возвращает то, что удалили или поменяли руками, и разбирает последствия
+  прерванного запуска:
+  - удалённые объекты релизов Helm (Deployment, Service, HTTPRoute, NetworkPolicy и т. д.): прежде чем пропустить
+    релиз, стадия проверяет, что все объекты из его манифеста есть в кластере, и если чего-то нет, обновляет релиз;
+  - удалённый Secret `grafana-admin`: создаётся новый пароль, Grafana перезапускается, `make creds` показывает рабочий;
+  - веса canary, изменённые `make canary`, возвращаются к `CANARY_WEIGHT` (`changed=1`, поды не перезапускаются);
+  - релиз Helm, который остался в `pending-install` или `pending-upgrade` (оборвался SSH, Ctrl-C во время `helm --wait`),
+    откатывается на последнюю рабочую ревизию или удаляется и ставится заново;
+  - упавшая стадия: повторный запуск продолжает с текущего состояния.
+
+  Исключение — прерванный или упавший `kubeadm init`: preflight находит следы неготового кластера, ничего не меняет
+  и предлагает `make destroy YES=1`, после чего нужно запустить деплой заново.
+
+  ```text
+  $ kubectl -n web delete deployment web-v1
+  $ kubectl -n monitoring delete httproute grafana
+  $ sudo ./deploy.sh
+  ...
+      helm release web/web: some of its objects are missing in the cluster, upgrading to restore them
+      changed  helm release web/web (local)
+  ...
+      helm release monitoring/observability: some of its objects are missing in the cluster, upgrading to restore them
+      changed  helm release monitoring/observability (local)
+  ...
+  Done: ok=88 changed=2
+  ```
 - **Частичный запуск:** `sudo ONLY_STAGES="40-app" ./deploy.sh`.
 - **Удаление:** `make destroy` (спросит подтверждение, `make destroy YES=1` — без вопроса). Что удаляется:
   - `~/.kube/config`, если это копия admin.conf этого кластера;
@@ -903,13 +948,22 @@ sum by (version) (count_over_time({namespace="web", log_type="access"} | json [1
 
 - **Один узел, без HA.** Control plane и нагрузка работают на одном узле, резервного копирования etcd нет.
 - **Только Ubuntu 24.04** на «своём» хосте с systemd. WSL без systemd, контейнеры и хосты с другим Kubernetes не поддерживаются.
-- **arm64** полным прогоном не проверялся (все образы multi-arch, образ Fluentd собирается под arm64).
-- **Минимальный профиль** `PROFILE=small` (2 vCPU / 4 ГБ) — замеры уточняются. Проверенная конфигурация — 4 vCPU / 8 ГБ.
+- **arm64** проверяется в CI (раннер GitHub `ubuntu-24.04-arm`, containerd из репозитория Docker); на ВМ arm64
+  вручную не запускался.
+- **Минимальный профиль** `PROFILE=small` (2 vCPU / 4 ГБ) проверен полным прогоном: 25/25, повторный запуск `changed=0`.
+  Хранение в нём короче: Prometheus 1 день / 1 ГБ, Loki 48 ч.
+- **Несколько сетевых интерфейсов.** `NODE_IP` — адрес источника маршрута по умолчанию. В ВМ с адаптерами NAT и
+  host-only это NAT-адрес, до которого браузер на хосте не достанет. Preflight предупреждает об этом до первого
+  запуска; нужный адрес задаётся так: `sudo NODE_IP=<адрес> ./deploy.sh`.
+- **Межсетевой экран хоста** (ufw, firewalld) не проверялся. Preflight предупреждает, если он включён.
 - **HTTP-прокси** для доступа в интернет не поддерживается: нужен прямой выход к реестрам и репозиториям.
 - **Docker Hub** по умолчанию идёт через зеркало `mirror.gcr.io`. Если зеркало недоступно, задайте `DOCKERHUB_MIRROR=""`.
+  Образ Fluentd лежит в ghcr.io; если ghcr.io недоступен, укажите зеркало через `FLUENTD_IMAGE` и `FLUENTD_IMAGE_TAG`
+  (Dockerfile образа — в [`images/fluentd`](images/fluentd)). Для quay.io и registry.k8s.io зеркала не настраиваются.
 - **DNS sslip.io.** Хосты `*.<NODE_IP>.sslip.io` требуют работающего DNS, а некоторые резолверы режут ответы с частными IP
   (защита от DNS rebinding). Обходы: `curl --resolve` (так делает `make check`) или запись в `/etc/hosts`.
-- **Самоподписанный CA.** Браузер доверяет сайтам только после импорта `out/ca.crt`.
+- **Самоподписанный CA.** Браузер доверяет сайтам только после импорта `out/ca.crt`. CA действует 10 лет и не ограничен
+  доменами, а его ключ лежит в Secret `cert-manager/platform-ca`: после проверки удалите CA из доверенных в браузере.
 - **Смена IP узла** после `kubeadm init` не поддерживается: адрес вшит в сертификаты и хосты. Preflight это обнаружит
   и ничего не тронет. Нужно `make destroy`, затем снова деплой.
 - **Alertmanager выключен** ради памяти: алерты вычисляются и видны в Prometheus/Grafana, но никуда не отправляются.

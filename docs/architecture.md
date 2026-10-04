@@ -154,7 +154,7 @@ warn/audit = restricted на привилегированных namespace ост
 | 3 | `20-cluster` | `kubeadm init` (конфиг из шаблона), готовность по `/readyz`, kubeconfig пользователя, Calico, local-path | 2 |
 | 4 | `30-platform` | CRD Gateway API v1.6.2 и Prometheus Operator (server-side apply) → namespaces с PSA → cert-manager → Traefik → релиз `platform` (GatewayClass, Gateway, редирект, CA и сертификат), выгрузка `out/ca.crt` | 3 |
 | 5 | `40-app` | релиз `web`: Deployments v1/v2, Services, HTTPRoute, Middleware, NetworkPolicy, PDB, ServiceMonitor | 4 |
-| 6 | `50-monitoring` | Secret `grafana-admin` → kube-prometheus-stack → релиз `observability` (маршрут Grafana, дашборды, алерты) | 4 |
+| 6 | `50-monitoring` | Secret `grafana-admin` → kube-prometheus-stack → релиз `observability` (маршрут Grafana, дашборды, алерты, NetworkPolicy для Prometheus и Loki) | 4 |
 | 7 | `60-logging` | Loki → Fluentd | 6 (datasource и ServiceMonitor) |
 
 Публикация приложения (стадии 4–5) не зависит от стека наблюдаемости: если мониторинг или логи не
@@ -164,8 +164,13 @@ warn/audit = restricted на привилегированных namespace ост
 - файлы на узле пишутся через «сгенерировать → сравнить → заменить и перезапустить только при разнице»;
 - пакеты ставятся только недостающие и фиксируются apt hold;
 - манифесты применяются через `kubectl diff --server-side`, затем server-side apply только при разнице;
-- Helm-релиз обновляется, только если изменился хэш входов (чарт, версия, values, `--set`), поэтому ревизии не растут;
-- секреты создаются один раз (`kubectl create -f -` через stdin) и восстанавливаются, если их удалили.
+- Helm-релиз обновляется, только если изменился хэш входов (чарт, версия, values, `--set`) или из кластера пропал
+  какой-то объект его манифеста (его ищет `kubectl get -f` по `helm get manifest`), поэтому ревизии не растут,
+  а удалённый руками Deployment или HTTPRoute возвращается;
+- релиз, оставшийся в `pending-install`/`pending-upgrade` после убитого `helm` (оборвался SSH), откатывается на
+  последнюю рабочую ревизию или удаляется, и только потом обновляется;
+- секреты создаются один раз (`kubectl create -f -` через stdin) и восстанавливаются, если их удалили;
+  после нового пароля Grafana перезапускается, иначе она осталась бы со старым в своей базе;
 - веса canary, изменённые `scripts/canary.sh` прямо в HTTPRoute, стадия `40-app` сравнивает с `CANARY_WEIGHT` и при
   расхождении принудительно обновляет релиз `web` (поды не перезапускаются);
 - preflight выбирает `CONTAINERD_SOURCE=docker`, если на хосте уже стоит `containerd.io` от Docker, и останавливается,
@@ -198,6 +203,7 @@ warn/audit = restricted на привилегированных namespace ост
 | TLS на входе, 301 с HTTP, HSTS, свой CA, проверка без `-k` | Gateway, HTTPRoute, cert-manager |
 | Rate limit 20 rps / burst 40 | Middleware `rate-limit` |
 | NetworkPolicy default-deny в `web` | `charts/web` |
+| NetworkPolicy для Prometheus и Loki: только из `monitoring` и `logging` (и с самого узла) | `charts/observability` |
 | PSA restricted для `web` и `cert-manager`; warn/audit restricted везде | `manifests/namespaces.yaml` |
 | Поды приложения: non-root, read-only rootfs, drop ALL, seccomp RuntimeDefault | `charts/web` |
 | Prometheus, Loki, дашборд Traefik не публикуются; Grafana с логином, без анонимного доступа | values, `charts/observability` |
@@ -245,7 +251,7 @@ warn/audit = restricted на привилегированных namespace ост
 ├── charts/
 │   ├── platform/              # GatewayClass, Gateway, редирект, CA и сертификат
 │   ├── web/                   # приложение v1/v2, HTTPRoute, Middleware, NetworkPolicy, PDB, ServiceMonitor
-│   └── observability/         # маршрут Grafana, дашборды, PrometheusRule
+│   └── observability/         # маршрут Grafana, дашборды, PrometheusRule, NetworkPolicy Prometheus/Loki
 ├── dashboards/                # JSON-дашборды Grafana
 ├── images/fluentd/            # Dockerfile образа Fluentd с плагином Loki
 ├── docs/architecture.md       # этот документ
