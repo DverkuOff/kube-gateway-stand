@@ -1,7 +1,7 @@
 # Архитектура
 
 Документ дополняет [README](../README.md): здесь подробнее о компонентах, потоках трафика, метрик и логов,
-namespaces и о том, в каком порядке всё разворачивается.
+namespaces, порядке развёртывания, удалении, безопасности, обосновании выбора компонентов и структуре репозитория.
 
 ## Общая схема
 
@@ -117,8 +117,9 @@ flowchart LR
   loki --> grafana["Grafana Explore<br/>LogQL"]
 ```
 
-- Fluentd монтирует **только** `/var/log/pods` и `/var/log/containers`, на чтение. Позиции чтения и буфер —
-  в `/var/lib/fluentd` на узле, поэтому рестарт пода не теряет и не дублирует строки.
+- Fluentd монтирует `/var/log/pods` и `/var/log/containers` только на чтение. На запись у него есть только
+  `/var/lib/fluentd` на узле (позиции чтения и файловый буфер), поэтому рестарт пода не теряет строки,
+  а `make destroy` удаляет этот каталог вместе со старыми логами, чтобы новый кластер не перечитывал их.
 - Собственные логи Fluentd не собираются (иначе петля).
 - Метки Loki — только с ограниченным набором значений: `namespace`, `container`, `stream`, `log_type`
   (`access`, `error`, `other`). `pod`, `request_id` и поля запроса остаются в теле строки и ищутся через `| json`.
@@ -165,6 +166,30 @@ warn/audit = restricted на привилегированных namespace ост
 - манифесты применяются через `kubectl diff --server-side`, затем server-side apply только при разнице;
 - Helm-релиз обновляется, только если изменился хэш входов (чарт, версия, values, `--set`), поэтому ревизии не растут;
 - секреты создаются один раз (`kubectl create -f -` через stdin) и восстанавливаются, если их удалили.
+- веса canary, изменённые `scripts/canary.sh` прямо в HTTPRoute, стадия `40-app` сравнивает с `CANARY_WEIGHT` и при
+  расхождении принудительно обновляет релиз `web` (поды не перезапускаются);
+- preflight выбирает `CONTAINERD_SOURCE=docker`, если на хосте уже стоит `containerd.io` от Docker, и останавливается,
+  если узел уже инициализирован с другим `NODE_IP` или от прошлого `kubeadm init` остались следы неготового кластера.
+
+Итог каждого запуска — `Done: ok=N changed=M`. На стенде (4 vCPU / 8 ГБ, Ubuntu 24.04.5): первый запуск
+`ok=44 changed=48` за 387 с, повторный `ok=90 changed=0` за 21 с, после перезагрузки узла `changed=0`.
+
+## Удаление (`make destroy`)
+
+`scripts/destroy.sh` возвращает хост в состояние «пакеты стоят, кластера нет», чтобы следующий `deploy.sh`
+создал кластер с нуля:
+
+| Что | Зачем |
+|---|---|
+| `~/.kube/config`, только если это копия admin.conf | не трогать чужие kubeconfig |
+| остановка kubelet, удаление всех pod sandbox, `kubeadm reset` | снять поды до сброса control plane |
+| `/var/log/pods`, `/var/log/containers` | иначе static pods продолжают счёт рестартов, а Fluentd перечитывает старые файлы |
+| `/var/lib/calico`, `/run/calico`, `/var/log/calico`, `/run/nodeagent`, `vxlan.calico`, `cali*`, маршруты, nft `calico-arp`, ipset `cali*` | состояние CNI |
+| цепочки `KUBE-*`, `cali-*`, `CNI-HOSTPORT-*`, `CNI-DN-*`, `CNI-SN-*` в iptables/ip6tables | иначе DNAT hostPort 80/443 остаётся направленным на IP старого пода Traefik |
+| `/opt/local-path-provisioner`, `/var/lib/fluentd`, `/var/lib/kube-gateway-stand` | данные PVC, позиции Fluentd, отпечатки Helm и кэш CRD |
+
+Пакеты, настройки ядра (sysctl, модули) и `out/` в репозитории остаются. На полном стеке destroy занимает ~3 с.
+Следующий деплой (образы уже в кэше) проходит за 225–249 с, сразу после него `make check` даёт 25/25.
 
 ## Безопасность
 
@@ -180,5 +205,50 @@ warn/audit = restricted на привилегированных namespace ост
 | Sidecar Grafana: только ConfigMap своего namespace | `values/kps.yaml` |
 | etcd/kube-proxy метрики на localhost; scheduler/controller-manager по HTTPS с authn/authz; node-exporter за kube-rbac-proxy | kubeadm, `values/kps.yaml` |
 | `DenyServiceExternalIPs` в apiserver | kubeadm |
-| Fluentd: только `/var/log/pods` и `/var/log/containers` на чтение, read-only rootfs, drop ALL | `values/fluentd.yaml` |
+| Fluentd: `/var/log/pods` и `/var/log/containers` на чтение, запись только в `/var/lib/fluentd`; read-only rootfs, drop ALL | `values/fluentd.yaml` |
 | Закреплённые версии, apt hold, проверка sha256 Helm; образ Fluentd с SBOM и provenance | `versions.env`, CI |
+
+## Почему так
+
+| Решение | Альтернативы | Почему |
+|---|---|---|
+| **kubeadm** | kind, minikube, k3d | приоритет кейса; настоящий кластер с control plane, который можно мониторить |
+| **Traefik** как реализация Gateway API | NGINX Gateway Fabric, Envoy Gateway | Traefik из коробки отдаёт HTTP-метрики шлюза: запросы, коды, latency по каждому backend (доля canary считается в PromQL), видит 429 и 404. В OSS-версии NGF этих метрик нет (только stub_status). Conformance Traefik покрывает всё, что используется здесь (core, redirect, rewrite, query matching, header modifier). Цена — rate limit через собственный Middleware Traefik |
+| **hostPort 80/443 + statusAddress** | MetalLB, NodePort, externalIPs | не нужен свободный IP в сети эксперта и облачный LB; стандартные порты; externalIPs устарели и небезопасны |
+| **Calico** | Flannel, Cilium | поддерживает NetworkPolicy, ставится официальным оператором, работает с iptables kube-proxy |
+| **cert-manager со своим CA + sslip.io** | Let's Encrypt, openssl в скрипте | публичный DNS и ACME в сети эксперта могут быть недоступны; cert-manager продлевает сертификат сам; CA выгружается в `out/ca.crt`, и curl проверяет TLS без `-k` |
+| **nginx-unprivileged** | своё приложение, podinfo | классические access/error-логи, ровно то, что просит кейс; non-root образ под несколько архитектур; HTTP-метрики берутся со шлюза |
+| **kube-prometheus-stack** | VictoriaMetrics, голый Prometheus | стандарт, привычный экспертам; Operator, дашборды и правила из коробки |
+| **Fluentd → Loki** | Filebeat → Elasticsearch/OpenSearch | Loki лёгкий (одна реплика, файловое хранилище), метрики и логи в одной Grafana; Elasticsearch/OpenSearch на одном небольшом узле тяжелы (JVM) |
+| **bash + Make + Helm 4** | Ansible, helmfile, Argo CD/Flux | на хосте эксперта ничего не нужно ставить заранее; каждая стадия читается как обычный скрипт; идемпотентность обеспечивают проверки, `kubectl diff` и хэш входов Helm |
+| **etcd-метрики только на localhost** | `0.0.0.0:2381` | этот порт отдаёт метрики по HTTP без аутентификации; задержки etcd видны через apiserver |
+| **containerd из архива Ubuntu** | бинарники с GitHub | только официальные репозитории, обновления безопасности через apt; Kubernetes 1.36 требует containerd ≥ 2.0, версия проверяется. Если на хосте уже есть `containerd.io` от Docker, используется он |
+
+## Структура репозитория
+
+```text
+.
+├── deploy.sh                  # точка входа: sudo ./deploy.sh (стадии по порядку)
+├── Makefile                   # make deploy | check | creds | demo-logs | demo-metrics | canary | destroy | lint
+├── versions.env               # все версии компонентов и контрольные суммы
+├── scripts/
+│   ├── lib.sh                 # общие функции: ok/changed, kapply, helm_release, wait_for, ...
+│   ├── 00-preflight.sh … 60-logging.sh   # стадии развёртывания
+│   ├── access-info.sh         # итоговые адреса в конце деплоя
+│   ├── check.sh               # make check
+│   ├── creds.sh  demo-logs.sh  demo-metrics.sh  canary.sh
+│   ├── destroy.sh             # make destroy
+│   └── lint.sh                # make lint (то же, что в CI)
+├── templates/                 # шаблон конфига kubeadm
+├── manifests/                 # namespaces (PSA), local-path-provisioner
+├── values/                    # values Helm: calico, cert-manager, traefik, kps, loki, fluentd (+ *-small)
+├── charts/
+│   ├── platform/              # GatewayClass, Gateway, редирект, CA и сертификат
+│   ├── web/                   # приложение v1/v2, HTTPRoute, Middleware, NetworkPolicy, PDB, ServiceMonitor
+│   └── observability/         # маршрут Grafana, дашборды, PrometheusRule
+├── dashboards/                # JSON-дашборды Grafana
+├── images/fluentd/            # Dockerfile образа Fluentd с плагином Loki
+├── docs/architecture.md       # этот документ
+├── .github/workflows/         # lint, image, e2e
+└── out/                       # создаётся при деплое: ca.crt (в git не попадает)
+```
