@@ -151,12 +151,23 @@ else
 fi
 var_free_kb="$(df -Pk /var | awk 'NR == 2 { print $4 }')"
 var_free_gib=$((var_free_kb / 1048576))
-if ((var_free_kb >= 20971520)); then
-  ok "free disk on /var: ${var_free_gib} GiB"
+# Images already in containerd's store (a re-run, or a deploy after `make destroy`, which keeps
+# them) are reused, so they count as available space. Not with Docker's containerd.io: its store
+# may hold Docker's own images.
+cached_kb=0
+if ! pkg_installed containerd.io && [[ -d /var/lib/containerd ]]; then
+  cached_kb="$(du -skx /var/lib/containerd 2>/dev/null || true)"
+  cached_kb="${cached_kb%%[[:space:]]*}"
+  [[ "$cached_kb" =~ ^[0-9]+$ ]] || cached_kb=0
+fi
+disk_note=""
+((cached_kb >= 1048576)) && disk_note=" (+$((cached_kb / 1048576)) GiB of images already pulled)"
+if ((var_free_kb + cached_kb >= 20971520)); then
+  ok "free disk on /var: ${var_free_gib} GiB${disk_note}"
 elif [[ "$CLUSTER_STATE" == ready ]]; then
-  warn "free disk on /var: ${var_free_gib} GiB (< 20 GiB); images and metrics may fill it up"
+  warn "free disk on /var: ${var_free_gib} GiB${disk_note} (< 20 GiB); images and metrics may fill it up"
 else
-  die "at least 20 GiB free on /var is required for images, etcd and metrics (found ${var_free_gib} GiB)"
+  die "at least 20 GiB free on /var is required for images, etcd and metrics (found ${var_free_gib} GiB${disk_note}); free some space or grow the disk (30 GB or more for a VM)"
 fi
 
 # ---------- 4. network ----------
